@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/pdcgo/inventory_service"
+	"github.com/pdcgo/shared/configs"
 	"github.com/pdcgo/shared/custom_connect"
 	"net/http"
 )
@@ -20,7 +21,18 @@ func InitializeApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	registerHandler := inventory_service.NewRegister(serveMux, defaultInterceptor)
+	appConfig, err := configs.NewProductionConfig()
+	if err != nil {
+		return nil, err
+	}
+	db, err := NewDatabase(appConfig)
+	if err != nil {
+		return nil, err
+	}
+	projectConfig := NewProjectConfig()
+	inventoryPushHandler := inventory_service.NewInventoryPushHandler(db, projectConfig)
+	inventoryPushHttpHandler := inventory_service.NewInventoryPushHttpHandler(inventoryPushHandler)
+	registerHandler := inventory_service.NewRegister(serveMux, defaultInterceptor, inventoryPushHttpHandler)
 	registerReflectFunc := custom_connect.NewRegisterReflect(serveMux)
 	app := NewApp(serveMux, registerHandler, registerReflectFunc)
 	return app, nil

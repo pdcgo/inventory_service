@@ -11,10 +11,11 @@ type ServiceReflectNames []string
 type RegisterHandler func() ServiceReflectNames
 
 // NewRegister mounts the v1 Connect InventoryService onto mux and returns the
-// gRPC-reflection service names.
+// gRPC-reflection service names. It also mounts the Pub/Sub push endpoint.
 func NewRegister(
 	mux *http.ServeMux,
 	defaultInterceptor custom_connect.DefaultInterceptor,
+	pushHttpHandler InventoryPushHttpHandler,
 ) RegisterHandler {
 	return func() ServiceReflectNames {
 		grpcReflects := ServiceReflectNames{}
@@ -25,6 +26,8 @@ func NewRegister(
 		)
 		mux.Handle(path, handler)
 		grpcReflects = append(grpcReflects, inventory_ifaceconnect.InventoryServiceName)
+
+		mux.HandleFunc("/inventory/push", pushHttpHandler)
 
 		return grpcReflects
 	}

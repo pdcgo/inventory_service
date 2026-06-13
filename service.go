@@ -10,6 +10,11 @@ import (
 
 type inventoryServiceImpl struct{}
 
+// Order implements [inventory_ifaceconnect.InventoryServiceHandler].
+func (s *inventoryServiceImpl) Order(context.Context, *connect.Request[inventory_iface.OrderRequest]) (*connect.Response[inventory_iface.OrderResponse], error) {
+	panic("unimplemented")
+}
+
 func NewInventoryService() *inventoryServiceImpl {
 	return &inventoryServiceImpl{}
 }

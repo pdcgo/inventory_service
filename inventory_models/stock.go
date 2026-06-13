@@ -3,12 +3,24 @@ package inventory_models
 import (
 	"time"
 
-	"github.com/pdcgo/shared/db_models"
+	"github.com/pdcgo/schema/services/inventory_iface/v1"
 )
 
-type BatchStock struct {
+type StockState struct {
 	ID          uint64 `gorm:"primarykey"`
-	SkuID       db_models.SkuID
+	ProductID   uint64 `gorm:"index:uniq_stock_state,unique"`
+	WarehouseID uint64 `gorm:"index:uniq_stock_state,unique"`
+
+	StockReady       int64
+	StockReadyAmount float64
+
+	UpdatedAt time.Time
+	CreatedAt time.Time
+}
+
+type StockBatch struct {
+	ID          uint64 `gorm:"primarykey"`
+	ProductID   uint64
 	WarehouseID uint64
 	InboundID   uint64
 
@@ -21,13 +33,15 @@ type BatchStock struct {
 	CreatedAt time.Time
 }
 
-type BatchStockLog struct {
-	ID          uint64 `gorm:"primarykey"`
-	SkuID       db_models.SkuID
-	WarehouseID uint64
-	BatchID     uint64
+type StockBatchLog struct {
+	ID            uint64 `gorm:"primarykey"`
+	ProductID     uint64
+	WarehouseID   uint64
+	UserID        uint64
+	BatchID       uint64
+	TransactionID uint64
 
-	ChangeType StockChangeType
+	ChangeType inventory_iface.StockChangeType
 
 	Change int64
 	Price  float64
