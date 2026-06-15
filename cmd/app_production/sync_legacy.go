@@ -38,9 +38,10 @@ func NewSyncLegacyFunc(
 	return func(ctx context.Context, c *cli.Command) error {
 
 		changeChan := make(chan *inventory_iface.StockChange, 5)
-		defer close(changeChan)
 
 		go func() {
+			defer close(changeChan)
+
 			err := db.
 				WithContext(ctx).
 				Transaction(func(tx *gorm.DB) error {

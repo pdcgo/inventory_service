@@ -3,6 +3,7 @@ package inventory_service
 import (
 	"net/http"
 
+	"github.com/pdcgo/inventory_service/inventory"
 	"github.com/pdcgo/schema/services/inventory_iface/v1/inventory_ifaceconnect"
 	"github.com/pdcgo/shared/custom_connect"
 )
@@ -21,7 +22,7 @@ func NewRegister(
 		grpcReflects := ServiceReflectNames{}
 
 		path, handler := inventory_ifaceconnect.NewInventoryServiceHandler(
-			NewInventoryService(),
+			inventory.NewInventoryService(),
 			defaultInterceptor,
 		)
 		mux.Handle(path, handler)
