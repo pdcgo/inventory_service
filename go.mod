@@ -6,11 +6,11 @@ require (
 	connectrpc.com/connect v1.20.0
 	github.com/google/wire v0.7.0
 	github.com/pdcgo/event_source v1.0.9
-	github.com/pdcgo/san_collection v1.0.3
-	github.com/pdcgo/schema v1.0.142
+	github.com/pdcgo/san_collection v1.0.4
+	github.com/pdcgo/schema v1.0.144
 	github.com/pdcgo/shared v1.0.134
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/net v0.55.0
+	github.com/urfave/cli/v3 v3.7.0
 	google.golang.org/protobuf v1.36.11
 	gorm.io/gorm v1.31.1
 )
@@ -112,6 +112,7 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39 // indirect
 	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
@@ -132,5 +133,3 @@ require (
 	gorm.io/driver/postgres v1.6.0 // indirect
 	gorm.io/driver/sqlite v1.6.0 // indirect
 )
-
-replace github.com/pdcgo/san_collection => ../pkgs/san_collection

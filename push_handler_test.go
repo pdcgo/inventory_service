@@ -43,6 +43,7 @@ func TestInventoryPushHandler(t *testing.T) {
 				assert.NoError(t, db.AutoMigrate(
 					&db_models.InvTransaction{},
 					&db_models.InvTxItem{},
+					&db_models.RestockCost{},
 					&invItemProblem{},
 					&inventory_models.StockState{},
 					&inventory_models.StockBatchLog{},
@@ -104,6 +105,7 @@ func TestInventoryPushHandler(t *testing.T) {
 					s, ok := stateOf(5)
 					assert.True(t, ok)
 					assert.Equal(t, int64(3), s.StockReady)
+					assert.Equal(t, float64(30), s.StockReadyAmount) // 3 × price 10
 					assert.Equal(t, int64(1), logCount())
 
 					var log inventory_models.StockBatchLog
@@ -111,6 +113,8 @@ func TestInventoryPushHandler(t *testing.T) {
 					assert.Equal(t, inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_RESTOCK, log.ChangeType)
 					assert.Equal(t, int64(3), log.Change)
 					assert.Equal(t, int64(3), log.BalanceCount)
+					assert.Equal(t, float64(30), log.BalanceAmount)
+					assert.Equal(t, float64(10), log.Price)
 					assert.Equal(t, uint64(100), log.TransactionID)
 					assert.Equal(t, uint64(7), log.UserID)
 				})
@@ -124,13 +128,15 @@ func TestInventoryPushHandler(t *testing.T) {
 					assert.NoError(t, err)
 
 					s, _ := stateOf(5)
-					assert.Equal(t, int64(0), s.StockReady) // 3 − 3
+					assert.Equal(t, int64(0), s.StockReady)         // 3 − 3
+					assert.Equal(t, float64(0), s.StockReadyAmount) // 30 − 30
 					assert.Equal(t, int64(2), logCount())
 
 					var log inventory_models.StockBatchLog
 					assert.NoError(t, db.Order("id desc").First(&log, "product_id = ?", uint64(5)).Error)
 					assert.Equal(t, inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_CREATED, log.ChangeType)
 					assert.Equal(t, int64(-3), log.Change)
+					assert.Equal(t, float64(0), log.BalanceAmount)
 				})
 
 				t.Run("unknown subscription is a no-op ack", func(t *testing.T) {

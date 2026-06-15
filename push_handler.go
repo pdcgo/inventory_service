@@ -105,6 +105,7 @@ type txExpandRow struct {
 	TransactionId uint64
 	TransactionAt time.Time
 	ChangeCount   int32
+	ChangeAmount  float64
 }
 
 func (r *txExpandRow) toStockLog(changeType warehouse_iface.StockChangeType) *warehouse_iface.StockChangeLog {
@@ -115,6 +116,7 @@ func (r *txExpandRow) toStockLog(changeType warehouse_iface.StockChangeType) *wa
 		TransactionId: r.TransactionId,
 		TransactionAt: timestamppb.New(r.TransactionAt),
 		ChangeCount:   r.ChangeCount,
+		ChangeAmount:  r.ChangeAmount,
 		Type:          changeType,
 	}
 }
@@ -131,16 +133,20 @@ func (r *txExpandRow) toStockLog(changeType warehouse_iface.StockChangeType) *wa
 func expandTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface.StockChangeType) ([]*warehouse_iface.StockChangeLog, error) {
 	// A STOCK_PROBLEM transaction's own items are the problem quantities, so the
 	// magnitude is iti.count; every other variant nets out problem items booked
-	// against the source transaction's items.
+	// against the source transaction's items. The value side uses the landed unit
+	// cost (item price + allocated per-piece restock fee), mirroring the warehouse.
 	netProblems := changeType != warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_STOCK_PROBLEM
 
 	countExpr := "iti.count as change_count"
+	amountExpr := "(iti.count * (iti.price + coalesce(rc.per_piece_fee, 0))) as change_amount"
 	query := tx.
 		Table("inv_tx_items iti").
 		Joins("join inv_transactions it on it.id = iti.inv_transaction_id").
+		Joins("left join restock_costs rc on rc.inv_transaction_id = iti.inv_transaction_id").
 		Where("iti.inv_transaction_id = ?", transactionId)
 	if netProblems {
 		countExpr = "(iti.count - coalesce(iip.count, 0)) as change_count"
+		amountExpr = "((iti.count - coalesce(iip.count, 0)) * (iti.price + coalesce(rc.per_piece_fee, 0))) as change_amount"
 		query = query.Joins("left join inv_item_problems iip on iip.tx_item_id = iti.id")
 	}
 
@@ -153,6 +159,7 @@ func expandTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface
 			"it.id as transaction_id",
 			"it.created as transaction_at",
 			countExpr,
+			amountExpr,
 		}).
 		Find(&rows).
 		Error
@@ -185,7 +192,9 @@ func stockChangeLogToInventory(log *warehouse_iface.StockChangeLog) (*inventory_
 		TransactionId: log.TransactionId,
 	}
 
-	amount := math.Abs(float64(log.ChangeCount)) // directional default: magnitude
+	// directional default: magnitudes (the reason supplies the sign downstream).
+	count := int64(math.Abs(float64(log.ChangeCount)))
+	value := math.Abs(log.ChangeAmount)
 	switch log.Type {
 	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_ACCEPTED:
 		change.Change = &inventory_iface.StockChange_OrderCreated{OrderCreated: &inventory_iface.OrderCreated{}}
@@ -201,13 +210,15 @@ func stockChangeLogToInventory(log *warehouse_iface.StockChangeLog) (*inventory_
 		change.Change = &inventory_iface.StockChange_FoundBack{FoundBack: &inventory_iface.FoundBack{}}
 	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_STOCK_ADJUSTMENT:
 		change.Change = &inventory_iface.StockChange_Adjustment{Adjustment: &inventory_iface.Adjustment{}}
-		amount = float64(log.ChangeCount) // caller-signed
+		count = int64(log.ChangeCount) // caller-signed
+		value = log.ChangeAmount       // caller-signed
 	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT,
 		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN,
 		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT_CANCELED,
 		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN_CANCELED:
 		change.Change = &inventory_iface.StockChange_Transfer{Transfer: &inventory_iface.Transfer{}}
-		amount = float64(log.ChangeCount) // caller-signed (out/in carried by the sign)
+		count = int64(log.ChangeCount) // caller-signed (out/in carried by the sign)
+		value = log.ChangeAmount       // caller-signed
 	default:
 		return nil, nil // unmapped type → skip
 	}
@@ -217,8 +228,9 @@ func stockChangeLogToInventory(log *warehouse_iface.StockChangeLog) (*inventory_
 		return nil, err
 	}
 	change.Changes = []*inventory_iface.ChangeItem{{
-		ProductId: uint64(sku.ProductID),
-		Amount:    amount,
+		ProductId:    uint64(sku.ProductID),
+		ChangeCount:  count,
+		ChangeAmount: value,
 	}}
 
 	return change, nil

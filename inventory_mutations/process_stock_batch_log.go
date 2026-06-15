@@ -17,9 +17,11 @@ import (
 //
 // Stage 1 locks (or creates) every StockState the change touches up front, so the
 // whole StockChange mutates atomically and consistently; stage 2 applies the
-// signed delta to each locked state and writes the resulting balance into the log.
-// Only the count side (StockReady / BalanceCount) is maintained — cost/batch (FIFO)
-// tracking is out of scope here, so the *Amount and Batch* log fields stay zero.
+// signed count and value deltas to each locked state and writes the resulting
+// balances into the log. Both the count side (StockReady / BalanceCount) and the
+// value side (StockReadyAmount / BalanceAmount, plus the per-unit Price) are
+// maintained. Per-batch FIFO tracking (the StockBatch table and the Batch* log
+// fields) is out of scope here, so those stay zero.
 func NewProcessStockBatchLog(tx *gorm.DB) san_execution.NextFuncParam[*inventory_iface.StockChange] {
 
 	state := map[uint64]*inventory_models.StockState{} // state is map[product_id]
@@ -60,17 +62,28 @@ func NewProcessStockBatchLog(tx *gorm.DB) san_execution.NextFuncParam[*inventory
 						continue
 					}
 
-					// count only: amount is the quantity; the reason gives the sign.
-					delta := sign * int64(item.Amount)
-					st.StockReady += delta
+					// change_count is the quantity, change_amount the value; the reason
+					// gives the sign, applied identically to both sides.
+					countDelta := sign * item.ChangeCount
+					valueDelta := float64(sign) * item.ChangeAmount
+					st.StockReady += countDelta
+					st.StockReadyAmount += valueDelta
 
 					if err := tx.Model(&inventory_models.StockState{}).
 						Where("id = ?", st.ID).
 						Updates(map[string]interface{}{
-							"stock_ready": st.StockReady,
-							"updated_at":  now,
+							"stock_ready":        st.StockReady,
+							"stock_ready_amount": st.StockReadyAmount,
+							"updated_at":         now,
 						}).Error; err != nil {
 						return nil, err
+					}
+
+					// per-unit price for this change (count and value share a sign, so
+					// the ratio is non-negative); zero counts are skipped upstream.
+					var unitPrice float64
+					if item.ChangeCount != 0 {
+						unitPrice = item.ChangeAmount / float64(item.ChangeCount)
 					}
 
 					log := inventory_models.StockBatchLog{
@@ -79,8 +92,10 @@ func NewProcessStockBatchLog(tx *gorm.DB) san_execution.NextFuncParam[*inventory
 						UserID:        data.UserId,
 						TransactionID: data.TransactionId,
 						ChangeType:    changeType,
-						Change:        delta,
+						Change:        countDelta,
+						Price:         unitPrice,
 						BalanceCount:  st.StockReady,
+						BalanceAmount: st.StockReadyAmount,
 						CreatedAt:     now,
 					}
 					if err := tx.Create(&log).Error; err != nil {
@@ -100,8 +115,8 @@ func NewProcessStockBatchLog(tx *gorm.DB) san_execution.NextFuncParam[*inventory
 //   - stock leaves on order-created and warehouse problems (−);
 //   - stock comes in on order-cancel, restock, return, and found-back (+);
 //   - adjustment and transfer are caller-signed: the sign multiplier is +1 so the
-//     ChangeItem.amount's own sign decides the direction (transfer out / negative
-//     adjustment use a negative amount).
+//     ChangeItem's own signed change_count/change_amount decide the direction
+//     (transfer out / negative adjustment carry negative values).
 func changeDirection(data *inventory_iface.StockChange) (inventory_iface.StockChangeType, int64, error) {
 	switch data.Change.(type) {
 	case *inventory_iface.StockChange_OrderCreated:

@@ -46,7 +46,7 @@ func TestProcessStockBatchLog(t *testing.T) {
 					ProductID: 1, WarehouseID: 9, StockReady: 10, CreatedAt: at, UpdatedAt: at,
 				}).Error)
 
-				t.Run("order created subtracts ready stock and logs the balance", func(t *testing.T) {
+				t.Run("order created subtracts ready stock/value and logs the balance", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
 						At:          timestamppb.New(at),
 						WarehouseId: 9,
@@ -55,14 +55,16 @@ func TestProcessStockBatchLog(t *testing.T) {
 							OrderCreated: &inventory_iface.OrderCreated{OrderId: 100},
 						},
 						Changes: []*inventory_iface.ChangeItem{
-							{ProductId: 1, Amount: 3},
-							{ProductId: 2, Amount: 5},
+							{ProductId: 1, ChangeCount: 3, ChangeAmount: 30},
+							{ProductId: 2, ChangeCount: 5, ChangeAmount: 50},
 						},
 					})
 					assert.NoError(t, err)
 
-					assert.Equal(t, int64(7), stateOf(1).StockReady)  // 10 - 3
-					assert.Equal(t, int64(-5), stateOf(2).StockReady) // 0 - 5 (state created)
+					assert.Equal(t, int64(7), stateOf(1).StockReady)           // 10 - 3
+					assert.Equal(t, float64(-30), stateOf(1).StockReadyAmount) // 0 - 30
+					assert.Equal(t, int64(-5), stateOf(2).StockReady)          // 0 - 5 (state created)
+					assert.Equal(t, float64(-50), stateOf(2).StockReadyAmount) // 0 - 50
 
 					l1 := logsOf(1)
 					assert.Len(t, l1, 1)
@@ -70,14 +72,17 @@ func TestProcessStockBatchLog(t *testing.T) {
 					assert.Equal(t, uint64(7), l1[0].UserID)
 					assert.Equal(t, int64(-3), l1[0].Change)
 					assert.Equal(t, int64(7), l1[0].BalanceCount)
+					assert.Equal(t, float64(10), l1[0].Price)
+					assert.Equal(t, float64(-30), l1[0].BalanceAmount)
 
 					l2 := logsOf(2)
 					assert.Len(t, l2, 1)
 					assert.Equal(t, int64(-5), l2[0].Change)
 					assert.Equal(t, int64(-5), l2[0].BalanceCount)
+					assert.Equal(t, float64(-50), l2[0].BalanceAmount)
 				})
 
-				t.Run("order canceled adds the stock back", func(t *testing.T) {
+				t.Run("order canceled adds the stock/value back", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
 						At:          timestamppb.New(at),
 						WarehouseId: 9,
@@ -86,20 +91,22 @@ func TestProcessStockBatchLog(t *testing.T) {
 							OrderCanceled: &inventory_iface.OrderCanceled{OrderId: 100},
 						},
 						Changes: []*inventory_iface.ChangeItem{
-							{ProductId: 1, Amount: 3},
+							{ProductId: 1, ChangeCount: 3, ChangeAmount: 30},
 						},
 					})
 					assert.NoError(t, err)
 
-					assert.Equal(t, int64(10), stateOf(1).StockReady) // 7 + 3 back to 10
+					assert.Equal(t, int64(10), stateOf(1).StockReady)        // 7 + 3 back to 10
+					assert.Equal(t, float64(0), stateOf(1).StockReadyAmount) // -30 + 30 back to 0
 					l1 := logsOf(1)
 					assert.Len(t, l1, 2)
 					assert.Equal(t, inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_CANCELED, l1[1].ChangeType)
 					assert.Equal(t, int64(3), l1[1].Change)
 					assert.Equal(t, int64(10), l1[1].BalanceCount)
+					assert.Equal(t, float64(0), l1[1].BalanceAmount)
 				})
 
-				t.Run("restock adds new stock", func(t *testing.T) {
+				t.Run("restock adds new stock/value", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
 						At:            timestamppb.New(at),
 						WarehouseId:   9,
@@ -108,51 +115,56 @@ func TestProcessStockBatchLog(t *testing.T) {
 						Change: &inventory_iface.StockChange_Restock{
 							Restock: &inventory_iface.Restock{},
 						},
-						Changes: []*inventory_iface.ChangeItem{{ProductId: 3, Amount: 8}},
+						Changes: []*inventory_iface.ChangeItem{{ProductId: 3, ChangeCount: 8, ChangeAmount: 80}},
 					})
 					assert.NoError(t, err)
 					assert.Equal(t, int64(8), stateOf(3).StockReady)
+					assert.Equal(t, float64(80), stateOf(3).StockReadyAmount)
 					l := logsOf(3)
 					assert.Len(t, l, 1)
 					assert.Equal(t, inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_RESTOCK, l[0].ChangeType)
 					assert.Equal(t, int64(8), l[0].Change)
+					assert.Equal(t, float64(10), l[0].Price)
+					assert.Equal(t, float64(80), l[0].BalanceAmount)
 					assert.Equal(t, uint64(50), l[0].TransactionID)
 				})
 
 				t.Run("problem subtracts stock", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
-						At:          timestamppb.New(at),
-						WarehouseId: 9,
-						UserId:      7,
+						At:            timestamppb.New(at),
+						WarehouseId:   9,
+						UserId:        7,
 						TransactionId: 60,
 						Change: &inventory_iface.StockChange_Problem{
 							Problem: &inventory_iface.Problem{},
 						},
-						Changes: []*inventory_iface.ChangeItem{{ProductId: 1, Amount: 2}},
+						Changes: []*inventory_iface.ChangeItem{{ProductId: 1, ChangeCount: 2, ChangeAmount: 20}},
 					})
 					assert.NoError(t, err)
-					assert.Equal(t, int64(8), stateOf(1).StockReady) // 10 - 2
+					assert.Equal(t, int64(8), stateOf(1).StockReady)           // 10 - 2
+					assert.Equal(t, float64(-20), stateOf(1).StockReadyAmount) // 0 - 20
 				})
 
-				t.Run("adjustment uses the amount sign", func(t *testing.T) {
+				t.Run("adjustment uses the signed count/amount", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
-						At:          timestamppb.New(at),
-						WarehouseId: 9,
-						UserId:      7,
+						At:            timestamppb.New(at),
+						WarehouseId:   9,
+						UserId:        7,
 						TransactionId: 70,
 						Change: &inventory_iface.StockChange_Adjustment{
 							Adjustment: &inventory_iface.Adjustment{},
 						},
-						Changes: []*inventory_iface.ChangeItem{{ProductId: 3, Amount: -5}}, // negative = decrease
+						Changes: []*inventory_iface.ChangeItem{{ProductId: 3, ChangeCount: -5, ChangeAmount: -50}}, // negative = decrease
 					})
 					assert.NoError(t, err)
-					assert.Equal(t, int64(3), stateOf(3).StockReady) // 8 - 5
+					assert.Equal(t, int64(3), stateOf(3).StockReady)          // 8 - 5
+					assert.Equal(t, float64(30), stateOf(3).StockReadyAmount) // 80 - 50
 				})
 
 				t.Run("missing change reason errors", func(t *testing.T) {
 					_, err := inventory_mutations.NewProcessStockBatchLog(db)(&inventory_iface.StockChange{
 						WarehouseId: 9,
-						Changes:     []*inventory_iface.ChangeItem{{ProductId: 1, Amount: 1}},
+						Changes:     []*inventory_iface.ChangeItem{{ProductId: 1, ChangeCount: 1, ChangeAmount: 10}},
 					})
 					assert.Error(t, err)
 				})
