@@ -31,6 +31,15 @@ type invItemProblem struct {
 
 func (invItemProblem) TableName() string { return "inv_item_problems" }
 
+// placementSku is a minimal stand-in for the skus table so the placement
+// processor's `left join skus s on s.id = ih.sku_id` resolves product_id.
+type placementSku struct {
+	ID        db_models.SkuID `gorm:"primarykey"`
+	ProductID uint
+}
+
+func (placementSku) TableName() string { return "skus" }
+
 func TestInventoryPushHandler(t *testing.T) {
 	var scenario moretest_mock.DbScenario
 
@@ -44,9 +53,13 @@ func TestInventoryPushHandler(t *testing.T) {
 					&db_models.InvTransaction{},
 					&db_models.InvTxItem{},
 					&db_models.RestockCost{},
+					&db_models.InvertoryHistory{},
 					&invItemProblem{},
+					&placementSku{},
 					&inventory_models.StockState{},
 					&inventory_models.StockBatchLog{},
+					&inventory_models.StockPlacement{},
+					&inventory_models.StockPlacementLog{},
 				))
 
 				projectCfg := &san_config.ProjectConfig{ProjectID: "test"}
@@ -77,6 +90,14 @@ func TestInventoryPushHandler(t *testing.T) {
 					Total:            30,
 				}).Error)
 
+				// Placement source: tx 100 placed 3 units of product 5 into rack 11
+				// (invertory_histories.count is a positive magnitude on tx_id rows).
+				assert.NoError(t, db.Create(&placementSku{ID: sku, ProductID: 5}).Error)
+				txID := uint(100)
+				assert.NoError(t, db.Create(&db_models.InvertoryHistory{
+					TxID: &txID, SkuID: sku, WarehouseID: 9, RackID: 11, Count: 3, Created: at,
+				}).Error)
+
 				stateOf := func(productID uint64) (inventory_models.StockState, bool) {
 					var s inventory_models.StockState
 					res := db.Where("product_id = ? AND warehouse_id = ?", productID, uint64(9)).Limit(1).Find(&s)
@@ -87,6 +108,11 @@ func TestInventoryPushHandler(t *testing.T) {
 					var n int64
 					assert.NoError(t, db.Model(&inventory_models.StockBatchLog{}).Count(&n).Error)
 					return n
+				}
+				placementOf := func(rackID uint64) inventory_models.StockPlacement {
+					var p inventory_models.StockPlacement
+					assert.NoError(t, db.Where("product_id = ? AND warehouse_id = ? AND rack_id = ?", uint64(5), uint64(9), rackID).Limit(1).Find(&p).Error)
+					return p
 				}
 				push := func(sub string, event *warehouse_iface.StockEvent) error {
 					msg := event_source_mock.NewMockEvent(t, event)
@@ -117,6 +143,9 @@ func TestInventoryPushHandler(t *testing.T) {
 					assert.Equal(t, float64(10), log.Price)
 					assert.Equal(t, uint64(100), log.TransactionID)
 					assert.Equal(t, uint64(7), log.UserID)
+
+					// placement: rack 11 gained the restocked 3 units.
+					assert.Equal(t, int64(3), placementOf(11).Count)
 				})
 
 				t.Run("order accepted expands transaction and subtracts stock", func(t *testing.T) {
@@ -131,6 +160,9 @@ func TestInventoryPushHandler(t *testing.T) {
 					assert.Equal(t, int64(0), s.StockReady)         // 3 − 3
 					assert.Equal(t, float64(0), s.StockReadyAmount) // 30 − 30
 					assert.Equal(t, int64(2), logCount())
+
+					// placement: rack 11 released the 3 units (sign −1).
+					assert.Equal(t, int64(0), placementOf(11).Count)
 
 					var log inventory_models.StockBatchLog
 					assert.NoError(t, db.Order("id desc").First(&log, "product_id = ?", uint64(5)).Error)

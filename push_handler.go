@@ -79,9 +79,13 @@ func applyTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface.
 }
 
 // applyStockLogs converts each warehouse StockChangeLog to an inventory
-// StockChange and runs it through the stock-batch-log processor.
+// StockChange and applies it to inventory state: the stock-batch-log processor
+// runs per converted change (updating StockState), while the placement processor
+// runs once for the whole transaction (it re-derives per-rack moves from
+// invertory_histories by tx_id, so a single call covers every rack).
 func applyStockLogs(tx *gorm.DB, logs []*warehouse_iface.StockChangeLog) error {
-	proc := inventory_mutations.NewProcessStockBatchLog(tx)
+	batchProc := inventory_mutations.NewProcessStockBatchLog(tx)
+	var placementChange *inventory_iface.StockChange
 	for _, log := range logs {
 		change, err := stockChangeLogToInventory(log)
 		if err != nil {
@@ -90,7 +94,16 @@ func applyStockLogs(tx *gorm.DB, logs []*warehouse_iface.StockChangeLog) error {
 		if change == nil {
 			continue // unmapped type
 		}
-		if _, err := proc(change); err != nil {
+		if _, err := batchProc(change); err != nil {
+			return err
+		}
+		if placementChange == nil {
+			placementChange = change // any change carries the transaction + reason
+		}
+	}
+
+	if placementChange != nil {
+		if _, err := inventory_mutations.NewProcessStockPlacementLog(tx)(placementChange); err != nil {
 			return err
 		}
 	}

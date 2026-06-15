@@ -26,8 +26,9 @@ type StockPlacementLog struct {
 	TransactionID uint64
 	UserID        uint64
 
-	ChangeType inventory_iface.StockChangeType
-	Change     int64
+	ChangeType   inventory_iface.StockChangeType
+	Change       int64
+	BalanceCount int64
 
 	CreatedAt time.Time
 }
