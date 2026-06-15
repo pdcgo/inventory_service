@@ -33,7 +33,7 @@ func InitializeApp() (*cli.Command, error) {
 	projectConfig := NewProjectConfig()
 	inventoryPushHandler := inventory_service.NewInventoryPushHandler(db, projectConfig)
 	inventoryPushHttpHandler := inventory_service.NewInventoryPushHttpHandler(inventoryPushHandler)
-	registerHandler := inventory_service.NewRegister(serveMux, defaultInterceptor, inventoryPushHttpHandler)
+	registerHandler := inventory_service.NewRegister(serveMux, defaultInterceptor, inventoryPushHttpHandler, db)
 	registerReflectFunc := custom_connect.NewRegisterReflect(serveMux)
 	serviceApiFunc := NewServiceApiFunc(serveMux, registerHandler, registerReflectFunc)
 	syncLegacyFunc := NewSyncLegacyFunc(db)

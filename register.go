@@ -6,6 +6,7 @@ import (
 	"github.com/pdcgo/inventory_service/inventory"
 	"github.com/pdcgo/schema/services/inventory_iface/v1/inventory_ifaceconnect"
 	"github.com/pdcgo/shared/custom_connect"
+	"gorm.io/gorm"
 )
 
 type ServiceReflectNames []string
@@ -17,12 +18,13 @@ func NewRegister(
 	mux *http.ServeMux,
 	defaultInterceptor custom_connect.DefaultInterceptor,
 	pushHttpHandler InventoryPushHttpHandler,
+	db *gorm.DB,
 ) RegisterHandler {
 	return func() ServiceReflectNames {
 		grpcReflects := ServiceReflectNames{}
 
 		path, handler := inventory_ifaceconnect.NewInventoryServiceHandler(
-			inventory.NewInventoryService(),
+			inventory.NewInventoryService(db),
 			defaultInterceptor,
 		)
 		mux.Handle(path, handler)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestHello(t *testing.T) {
-	svc := inventory.NewInventoryService()
+	svc := inventory.NewInventoryService(nil)
 	res, err := svc.Hello(context.Background(), connect.NewRequest(&inventory_iface.HelloRequest{}))
 	assert.NoError(t, err)
 	assert.NotNil(t, res.Msg)

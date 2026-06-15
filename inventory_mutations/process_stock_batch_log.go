@@ -149,25 +149,35 @@ func changeTime(data *inventory_iface.StockChange) time.Time {
 }
 
 // lockOrCreateStockState locks the StockState row for (productID, warehouseID) FOR
-// UPDATE, creating a zero row if none exists.
+// UPDATE, creating a zero row if none exists. The create is race-safe: a row a
+// concurrent transaction may have committed for the same (product, warehouse) is
+// tolerated via ON CONFLICT DO NOTHING and then re-read under the lock. (Requires
+// READ COMMITTED — under REPEATABLE READ the re-read can't see the concurrent row.)
 func lockOrCreateStockState(tx *gorm.DB, productID, warehouseID uint64, now time.Time) (*inventory_models.StockState, error) {
 	var st inventory_models.StockState
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("product_id = ? AND warehouse_id = ?", productID, warehouseID).
 		First(&st).Error
-	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
-		st = inventory_models.StockState{
-			ProductID:   productID,
-			WarehouseID: warehouseID,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		if err := tx.Create(&st).Error; err != nil {
-			return nil, err
-		}
+	if err == nil {
+		return &st, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	create := inventory_models.StockState{
+		ProductID:   productID,
+		WarehouseID: warehouseID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&create).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("product_id = ? AND warehouse_id = ?", productID, warehouseID).
+		First(&st).Error; err != nil {
+		return nil, err
 	}
 	return &st, nil
 }

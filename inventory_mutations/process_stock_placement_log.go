@@ -108,25 +108,34 @@ func NewProcessStockPlacementLog(tx *gorm.DB) san_execution.NextFuncParam[*inven
 
 // lockOrCreateStockPlacement locks the StockPlacement row for
 // (productID, warehouseID, rackID) FOR UPDATE, creating a zero row if none exists.
+// The create is race-safe (ON CONFLICT DO NOTHING + re-read under the lock) — see
+// lockOrCreateStockState. Requires READ COMMITTED.
 func lockOrCreateStockPlacement(tx *gorm.DB, productID, warehouseID, rackID uint64, now time.Time) (*inventory_models.StockPlacement, error) {
 	var pl inventory_models.StockPlacement
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("product_id = ? AND warehouse_id = ? AND rack_id = ?", productID, warehouseID, rackID).
 		First(&pl).Error
-	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
-		pl = inventory_models.StockPlacement{
-			ProductID:   productID,
-			WarehouseID: warehouseID,
-			RackID:      rackID,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		if err := tx.Create(&pl).Error; err != nil {
-			return nil, err
-		}
+	if err == nil {
+		return &pl, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	create := inventory_models.StockPlacement{
+		ProductID:   productID,
+		WarehouseID: warehouseID,
+		RackID:      rackID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&create).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("product_id = ? AND warehouse_id = ? AND rack_id = ?", productID, warehouseID, rackID).
+		First(&pl).Error; err != nil {
+		return nil, err
 	}
 	return &pl, nil
 }
