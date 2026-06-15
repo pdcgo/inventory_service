@@ -19,13 +19,15 @@ type StockPlacement struct {
 }
 
 type StockPlacementLog struct {
-	ID          uint64 `gorm:"primarykey"`
-	ProductID   uint64
-	WarehouseID uint64
-	RackID      uint64
-	ChangeType  inventory_iface.StockChangeType
+	ID            uint64 `gorm:"primarykey"`
+	ProductID     uint64
+	WarehouseID   uint64
+	RackID        uint64
+	TransactionID uint64
+	UserID        uint64
 
-	Change int64
+	ChangeType inventory_iface.StockChangeType
+	Change     int64
 
 	CreatedAt time.Time
 }

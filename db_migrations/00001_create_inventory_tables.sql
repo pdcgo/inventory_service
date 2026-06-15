@@ -15,17 +15,21 @@ CREATE INDEX idx_stock_placements_product_id   ON stock_placements (product_id);
 CREATE INDEX idx_stock_placements_rack_id      ON stock_placements (rack_id);
 
 CREATE TABLE stock_placement_logs (
-    id           BIGSERIAL   PRIMARY KEY,
-    product_id   BIGINT      NOT NULL,
-    warehouse_id BIGINT      NOT NULL,
-    rack_id      BIGINT      NOT NULL,
-    change_type  INTEGER     NOT NULL DEFAULT 0,
-    change       BIGINT      NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             BIGSERIAL   PRIMARY KEY,
+    product_id     BIGINT      NOT NULL,
+    warehouse_id   BIGINT      NOT NULL,
+    rack_id        BIGINT      NOT NULL,
+    transaction_id BIGINT      NOT NULL DEFAULT 0,
+    user_id        BIGINT      NOT NULL DEFAULT 0,
+    change_type    INTEGER     NOT NULL DEFAULT 0,
+    change         BIGINT      NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_stock_placement_logs_product_id   ON stock_placement_logs (product_id);
-CREATE INDEX idx_stock_placement_logs_warehouse_id ON stock_placement_logs (warehouse_id);
-CREATE INDEX idx_stock_placement_logs_created_at   ON stock_placement_logs (created_at);
+CREATE INDEX idx_stock_placement_logs_product_id     ON stock_placement_logs (product_id);
+CREATE INDEX idx_stock_placement_logs_warehouse_id   ON stock_placement_logs (warehouse_id);
+CREATE INDEX idx_stock_placement_logs_transaction_id ON stock_placement_logs (transaction_id);
+CREATE INDEX idx_stock_placement_logs_user_id        ON stock_placement_logs (user_id);
+CREATE INDEX idx_stock_placement_logs_created_at     ON stock_placement_logs (created_at);
 
 CREATE TABLE stock_batches (
     id           BIGSERIAL        PRIMARY KEY,
