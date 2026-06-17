@@ -1,10 +1,11 @@
 package inventory_mutations
 
 import (
+	"log/slog"
 	"time"
 
-	"github.com/pdcgo/inventory_service/inventory_models"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -19,29 +20,30 @@ func ReconcileStockPlacement(tx *gorm.DB, productID, warehouseID, rackID uint64,
 		return err
 	}
 
-	delta := targetCount - pl.Count
-	if delta == 0 {
+	deltaCount := targetCount - pl.Count
+	if deltaCount == 0 {
 		return nil
 	}
 
-	pl.Count = targetCount
-	if err := tx.Model(&inventory_models.StockPlacement{}).
-		Where("id = ?", pl.ID).
-		Updates(map[string]interface{}{
-			"count":      pl.Count,
-			"updated_at": now,
-		}).Error; err != nil {
-		return err
-	}
+	slog.Warn("fixing diff",
+		"product_id", productID,
+		"warehouse_id", warehouseID,
+		"delta_count", deltaCount,
+	)
 
-	log := inventory_models.StockPlacementLog{
-		ProductID:    productID,
-		WarehouseID:  warehouseID,
-		RackID:       rackID,
-		ChangeType:   inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_ADJUSTMENT,
-		Change:       delta,
-		BalanceCount: pl.Count,
-		CreatedAt:    now,
-	}
-	return tx.Create(&log).Error
+	process := NewProcessStockPlacementLog(tx)
+	_, err = process(&inventory_iface.StockChange{
+		At:          timestamppb.New(now),
+		WarehouseId: warehouseID,
+		UserId:      1,
+		Changes: []*inventory_iface.ChangeItem{
+			{
+				ProductId:   productID,
+				ChangeCount: deltaCount,
+			},
+		},
+		Change: &inventory_iface.StockChange_Adjustment{},
+	})
+
+	return err
 }

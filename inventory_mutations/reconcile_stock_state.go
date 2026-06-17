@@ -1,11 +1,12 @@
 package inventory_mutations
 
 import (
+	"log/slog"
 	"math"
 	"time"
 
-	"github.com/pdcgo/inventory_service/inventory_models"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -22,37 +23,46 @@ func ReconcileStockState(tx *gorm.DB, productID, warehouseID uint64, targetCount
 		return err
 	}
 
+	// slog.Info("state_stock",
+	// 	"product_id", st.ProductID,
+	// 	"warehouse_id", st.WarehouseID,
+	// 	"true_count", st.StockReady,
+	// 	"true_amount", st.StockReadyAmount,
+	// )
+
 	diffCount := targetCount - st.StockReady
 	diffAmount := targetAmount - st.StockReadyAmount
 	if diffCount == 0 && math.Abs(diffAmount) < 1e-6 {
 		return nil
 	}
 
-	st.StockReady = targetCount
-	st.StockReadyAmount = targetAmount
-	if err := tx.Model(&inventory_models.StockState{}).
-		Where("id = ?", st.ID).
-		Updates(map[string]interface{}{
-			"stock_ready":        st.StockReady,
-			"stock_ready_amount": st.StockReadyAmount,
-			"updated_at":         now,
-		}).Error; err != nil {
+	slog.Warn("fixing diff",
+		"product_id", st.ProductID,
+		"warehouse_id", st.WarehouseID,
+		"true_count", diffCount,
+		"true_amount", diffAmount,
+	)
+
+	process := NewProcessStockBatchLog(tx)
+	_, err = process(&inventory_iface.StockChange{
+		At:            timestamppb.New(now),
+		WarehouseId:   warehouseID,
+		UserId:        1,
+		TransactionId: 0,
+		Changes: []*inventory_iface.ChangeItem{
+			{
+				ProductId:    productID,
+				ChangeCount:  diffCount,
+				ChangeAmount: diffAmount,
+			},
+		},
+		Change: &inventory_iface.StockChange_Adjustment{
+			Adjustment: &inventory_iface.Adjustment{},
+		},
+	})
+	if err != nil {
 		return err
 	}
 
-	var unitPrice float64
-	if diffCount != 0 {
-		unitPrice = diffAmount / float64(diffCount)
-	}
-	log := inventory_models.StockBatchLog{
-		ProductID:     productID,
-		WarehouseID:   warehouseID,
-		ChangeType:    inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_ADJUSTMENT,
-		Change:        diffCount,
-		Price:         unitPrice,
-		BalanceCount:  st.StockReady,
-		BalanceAmount: st.StockReadyAmount,
-		CreatedAt:     now,
-	}
-	return tx.Create(&log).Error
+	return nil
 }

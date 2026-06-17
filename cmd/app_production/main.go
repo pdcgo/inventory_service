@@ -34,6 +34,18 @@ func NewApp(
 			{
 				Name:   "sync-legacy",
 				Action: cli.ActionFunc(syncLegacyFunc),
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "host",
+						Aliases: []string{"h"},
+						Value:   "http://localhost:8080",
+					},
+					&cli.Int32Flag{
+						Name:    "concurency",
+						Aliases: []string{"c"},
+						Value:   5,
+					},
+				},
 			},
 		},
 	}
