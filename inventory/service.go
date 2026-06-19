@@ -29,9 +29,9 @@ func (s *inventoryServiceImpl) ProductPlacementLog(context.Context, *connect.Req
 }
 
 // StockMovement implements [inventory_ifaceconnect.InventoryServiceHandler].
-func (s *inventoryServiceImpl) StockMovement(context.Context, *connect.Request[inventory_iface.StockMovementRequest]) (*connect.Response[inventory_iface.StockMovementResponse], error) {
-	panic("unimplemented")
-}
+// func (s *inventoryServiceImpl) StockMovement(context.Context, *connect.Request[inventory_iface.StockMovementRequest]) (*connect.Response[inventory_iface.StockMovementResponse], error) {
+// 	panic("unimplemented")
+// }
 
 // Order implements [inventory_ifaceconnect.InventoryServiceHandler].
 func (s *inventoryServiceImpl) Order(context.Context, *connect.Request[inventory_iface.OrderRequest]) (*connect.Response[inventory_iface.OrderResponse], error) {
