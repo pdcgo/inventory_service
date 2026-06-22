@@ -7,7 +7,7 @@ require (
 	github.com/google/wire v0.7.0
 	github.com/pdcgo/event_source v1.0.9
 	github.com/pdcgo/san_collection v1.0.4
-	github.com/pdcgo/schema v1.0.145
+	github.com/pdcgo/schema v1.0.149
 	github.com/pdcgo/shared v1.0.134
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.7.0

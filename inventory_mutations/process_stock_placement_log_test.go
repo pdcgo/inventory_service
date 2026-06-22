@@ -134,6 +134,33 @@ func TestProcessStockPlacementLog(t *testing.T) {
 					assert.NoError(t, err)
 					assert.Equal(t, int64(4), logCount()) // unchanged
 				})
+
+				t.Run("transfer out subtracts per-rack stock", func(t *testing.T) {
+					// fresh tx + rack, independent of the prior subtests.
+					assert.NoError(t, db.Create(&db_models.InvertoryHistory{
+						TxID: ptr(uint(200)), SkuID: sku, WarehouseID: 9, RackID: 31, Count: 6, Created: at,
+					}).Error)
+
+					// Transfer reason is caller-signed; the negative ChangeItem drives the OUT sign.
+					_, err := inventory_mutations.NewProcessStockPlacementLog(db)(&inventory_iface.StockChange{
+						At:            timestamppb.New(at),
+						WarehouseId:   9,
+						UserId:        7,
+						TransactionId: 200,
+						Changes:       []*inventory_iface.ChangeItem{{ProductId: 5, ChangeCount: -6, ChangeAmount: -60}},
+						Change:        &inventory_iface.StockChange_Transfer{Transfer: &inventory_iface.Transfer{}},
+					})
+					assert.NoError(t, err)
+
+					p31, ok := placementOf(31)
+					assert.True(t, ok)
+					assert.Equal(t, int64(-6), p31.Count) // OUT decrements the source rack
+
+					var log inventory_models.StockPlacementLog
+					assert.NoError(t, db.Where("rack_id = ?", uint64(31)).Order("id desc").First(&log).Error)
+					assert.Equal(t, inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER, log.ChangeType)
+					assert.Equal(t, int64(-6), log.Change)
+				})
 			})
 		},
 	)

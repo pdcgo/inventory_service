@@ -71,6 +71,41 @@ func (s *inventoryServiceImpl) ProductReconcile(
 			return err
 		}
 
+		// StockPlacement: legacy per-rack on-hand, unioned with every rack that
+		// currently holds a placement (target 0) so racks that no longer hold stock
+		// are reconciled to zero. Ordered by rack_id so locks are taken ascending.
+		type rackTarget struct {
+			RackID uint64
+			Count  int64
+		}
+		var racks []rackTarget
+		err = tx.Raw(`
+			select rack_id, sum(cnt) as count from (
+				select ih.rack_id as rack_id, (-1 * ih.count) as cnt
+				from invertory_histories ih
+				left join skus s on s.id = ih.sku_id
+				where ih.tx_id is null and s.product_id = ? and s.warehouse_id = ?
+				union all
+				select sp.rack_id as rack_id, 0 as cnt
+				from stock_placements sp
+				where sp.product_id = ? and sp.warehouse_id = ?
+			) t
+			group by rack_id
+			order by rack_id
+		`, productID, warehouseID, productID, warehouseID).Scan(&racks).Error
+		if err != nil {
+			return err
+		}
+
+		for _, r := range racks {
+			if r.RackID == 0 {
+				continue
+			}
+			if err := inventory_mutations.ReconcileStockPlacement(tx, productID, warehouseID, r.RackID, r.Count, now); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 

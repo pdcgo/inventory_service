@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"math"
+	"sort"
 	"time"
 
 	"github.com/pdcgo/inventory_service/inventory_mutations"
@@ -17,7 +18,7 @@ import (
 // not published yet, so each handled variant carries only a transaction_id: the
 // transaction's items are expanded (inv_tx_items, minus inv_item_problems) into
 // per-SKU StockChangeLogs and converted via stockChangeLogToInventory. Deferred
-// variants (found_back, adjustment, transfers, stock_change) are no-ops for now.
+// variants (adjustment, stock_change) are no-ops for now.
 //
 // It is shared by both ingestion paths — the Pub/Sub HTTP push handler and the
 // InventoryService.PushStockEvent RPC — and expects to run inside a transaction.
@@ -33,10 +34,16 @@ func ProcessStockEvent(tx *gorm.DB, event *warehouse_iface.StockEvent) error {
 		return applyTxItems(tx, data.ReturnAccepted.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_RETURN_ACCEPTED)
 	case *warehouse_iface.StockEvent_StockProblem:
 		return applyTxItems(tx, data.StockProblem.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_STOCK_PROBLEM)
-		// TODO(inventory): StockFoundBack, StockAdjustment, and the transfer
-		// variants (TransferWarehouse*) are not handled yet — transfers need a
-		// WarehouseTransfer → out/in tx lookup + cross-warehouse handling, and
-		// found_back/adjustment semantics are not finalized upstream.
+	case *warehouse_iface.StockEvent_StockFoundBack:
+		return applyTxItems(tx, data.StockFoundBack.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_STOCK_FOUND_BACK)
+	case *warehouse_iface.StockEvent_TransferWarehouseCreated:
+		return applyTransfer(tx, data.TransferWarehouseCreated.TransferId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT)
+	case *warehouse_iface.StockEvent_TransferWarehouseAccepted:
+		return applyTransfer(tx, data.TransferWarehouseAccepted.TransferId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN)
+	case *warehouse_iface.StockEvent_TransferWarehouseCanceled:
+		return applyTransfer(tx, data.TransferWarehouseCanceled.TransferId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT_CANCELED)
+		// TODO(inventory): StockAdjustment is not handled yet — its semantics are not
+		// finalized upstream (the warehouse never emits it; its expansion uses n=0).
 	}
 
 	return nil
@@ -52,12 +59,39 @@ func applyTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface.
 	return applyStockLogs(tx, logs)
 }
 
+// applyTransfer resolves the WarehouseTransfer for a transfer event and applies its OUT leg
+// (OutboundTxID) or IN leg (InboundTxID) under the given change type — mirroring the warehouse
+// push_handler dispatch (Created→OUT, Accepted→IN, Canceled→OUT_CANCELED).
+func applyTransfer(tx *gorm.DB, transferId uint64, changeType warehouse_iface.StockChangeType) error {
+	var transfer db_models.WarehouseTransfer
+	if err := tx.First(&transfer, transferId).Error; err != nil {
+		return err
+	}
+	txID := uint64(transfer.OutboundTxID)
+	switch changeType {
+	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN,
+		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN_CANCELED:
+		txID = uint64(transfer.InboundTxID)
+	}
+	return applyTxItems(tx, txID, changeType)
+}
+
 // applyStockLogs converts each warehouse StockChangeLog to an inventory
 // StockChange and applies it to inventory state: the stock-batch-log processor
 // runs per converted change (updating StockState), while the placement processor
 // runs once for the whole transaction (it re-derives per-rack moves from
 // invertory_histories by tx_id, so a single call covers every rack).
 func applyStockLogs(tx *gorm.DB, logs []*warehouse_iface.StockChangeLog) error {
+	// Lock the per-product StockState rows in a deterministic (warehouse, product)
+	// order so two concurrent multi-product events can't acquire them in opposite
+	// orders and deadlock. The order is invisible to the resulting balances.
+	sort.SliceStable(logs, func(i, j int) bool {
+		if logs[i].WarehouseId != logs[j].WarehouseId {
+			return logs[i].WarehouseId < logs[j].WarehouseId
+		}
+		return stockLogProductID(logs[i]) < stockLogProductID(logs[j])
+	})
+
 	batchProc := inventory_mutations.NewProcessStockBatchLog(tx)
 	var placementChange *inventory_iface.StockChange
 	for _, log := range logs {
@@ -82,6 +116,17 @@ func applyStockLogs(tx *gorm.DB, logs []*warehouse_iface.StockChangeLog) error {
 		}
 	}
 	return nil
+}
+
+// stockLogProductID decodes the product id from a change log's SkuID, used only to
+// order StockState locking. Returns 0 if the SkuID can't be decoded (such a row is
+// then skipped by the batch processor's product_id == 0 guard).
+func stockLogProductID(log *warehouse_iface.StockChangeLog) uint64 {
+	sku, err := db_models.SkuID(log.SkuId).Extract()
+	if err != nil {
+		return 0
+	}
+	return uint64(sku.ProductID)
 }
 
 // txExpandRow is the projected shape of an expanded transaction item.
@@ -154,11 +199,23 @@ func expandTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface
 		return nil, err
 	}
 
+	// Transfer legs where stock leaves the warehouse (OUT, IN_CANCELED) carry a negative
+	// magnitude; stockChangeLogToInventory passes transfer counts through caller-signed, so the
+	// sign must be baked in here (mirrors warehouse CreateStockChangeLog's n = -1).
+	sign := int32(1)
+	switch changeType {
+	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT,
+		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN_CANCELED:
+		sign = -1
+	}
+
 	logs := make([]*warehouse_iface.StockChangeLog, 0, len(rows))
 	for _, r := range rows {
 		if r.ChangeCount == 0 {
 			continue
 		}
+		r.ChangeCount *= sign
+		r.ChangeAmount *= float64(sign)
 		logs = append(logs, r.toStockLog(changeType))
 	}
 	return logs, nil

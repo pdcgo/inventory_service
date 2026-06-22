@@ -40,7 +40,7 @@ func TestProductReconcileRPC(t *testing.T) {
 				assert.NoError(t, err)
 				sku2, err := db_models.NewSkuID(&db_models.SkuData{WarehouseID: 9, TeamID: 1, ProductID: 5, VariantID: 2})
 				assert.NoError(t, err)
-				assert.NoError(t, db.Create(&[]skuRow{{ID: sku1, ProductID: 5}, {ID: sku2, ProductID: 5}}).Error)
+				assert.NoError(t, db.Create(&[]skuRow{{ID: sku1, ProductID: 5, WarehouseID: 9}, {ID: sku2, ProductID: 5, WarehouseID: 9}}).Error)
 
 				outboundTx := uint(999)
 				// legacy on-hand (tx_id null), unit value = price + ext = 10:

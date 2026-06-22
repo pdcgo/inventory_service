@@ -29,6 +29,16 @@ func NewProcessStockPlacementLog(tx *gorm.DB) san_execution.NextFuncParam[*inven
 					return nil, err
 				}
 
+				// Transfer is caller-signed: changeDirection returns +1, but the direction
+				// lives in the signed change_count. All racks of one transfer move the same
+				// way, so take the sign from the change items (OUT decrements, IN/cancel add).
+				if _, isTransfer := data.Change.(*inventory_iface.StockChange_Transfer); isTransfer {
+					sign = 1
+					if len(data.Changes) > 0 && data.Changes[0].ChangeCount < 0 {
+						sign = -1
+					}
+				}
+
 				// 1. per-rack movements for this transaction. invertory_histories.count
 				// is a positive magnitude on tx_id rows; product_id comes from skus.
 				type placementRow struct {
