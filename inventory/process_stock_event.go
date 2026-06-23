@@ -1,10 +1,12 @@
 package inventory
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
 
+	"github.com/pdcgo/inventory_service/inventory_models"
 	"github.com/pdcgo/inventory_service/inventory_mutations"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
 	warehouse_iface "github.com/pdcgo/schema/services/warehouse_iface/v1"
@@ -27,7 +29,7 @@ func ProcessStockEvent(tx *gorm.DB, event *warehouse_iface.StockEvent) error {
 	case *warehouse_iface.StockEvent_OrderAccepted:
 		return applyTxItems(tx, data.OrderAccepted.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_ACCEPTED)
 	case *warehouse_iface.StockEvent_OrderCanceled:
-		return applyTxItems(tx, data.OrderCanceled.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_CANCELED)
+		return applyOrderCancel(tx, data.OrderCanceled.TransactionId)
 	case *warehouse_iface.StockEvent_RestockAccepted:
 		return applyTxItems(tx, data.RestockAccepted.TransactionId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_RESTOCK_ACCEPTED)
 	case *warehouse_iface.StockEvent_ReturnAccepted:
@@ -41,7 +43,7 @@ func ProcessStockEvent(tx *gorm.DB, event *warehouse_iface.StockEvent) error {
 	case *warehouse_iface.StockEvent_TransferWarehouseAccepted:
 		return applyTransfer(tx, data.TransferWarehouseAccepted.TransferId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN)
 	case *warehouse_iface.StockEvent_TransferWarehouseCanceled:
-		return applyTransfer(tx, data.TransferWarehouseCanceled.TransferId, warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_OUT_CANCELED)
+		return applyTransferCancel(tx, data.TransferWarehouseCanceled.TransferId)
 		// TODO(inventory): StockAdjustment is not handled yet — its semantics are not
 		// finalized upstream (the warehouse never emits it; its expansion uses n=0).
 	}
@@ -74,6 +76,129 @@ func applyTransfer(tx *gorm.DB, transferId uint64, changeType warehouse_iface.St
 		txID = uint64(transfer.InboundTxID)
 	}
 	return applyTxItems(tx, txID, changeType)
+}
+
+// applyOrderCancel reverses an order by reconstructing the cancel from its
+// existing stock batch log (see reconstructCancel), using the ORDER_CANCELED
+// reason so the reversing log is typed as a cancel.
+func applyOrderCancel(tx *gorm.DB, transactionId uint64) error {
+	return reconstructCancel(tx, transactionId,
+		"order cancel: no stock batch log for transaction %d",
+		func() *inventory_iface.StockChange {
+			return &inventory_iface.StockChange{
+				Change: &inventory_iface.StockChange_OrderCanceled{OrderCanceled: &inventory_iface.OrderCanceled{}},
+			}
+		})
+}
+
+// applyTransferCancel reverses a canceled warehouse transfer's OUT leg (the
+// inbound leg is not touched by a cancel) by reconstructing it from the outbound
+// transaction's existing stock batch log (see reconstructCancel), using the
+// TRANSFER reason — the same reason the OUT leg was logged under, so the reversal
+// nets it to zero.
+func applyTransferCancel(tx *gorm.DB, transferId uint64) error {
+	var transfer db_models.WarehouseTransfer
+	if err := tx.First(&transfer, transferId).Error; err != nil {
+		return err
+	}
+	return reconstructCancel(tx, uint64(transfer.OutboundTxID),
+		"transfer cancel: no stock batch log for transaction %d",
+		func() *inventory_iface.StockChange {
+			return &inventory_iface.StockChange{
+				Change: &inventory_iface.StockChange_Transfer{Transfer: &inventory_iface.Transfer{}},
+			}
+		})
+}
+
+// reconstructCancel reverses a transaction by reconstructing the cancel from its
+// existing stock batch log rather than re-expanding source items, so a duplicated
+// cancel event is idempotent. It sums the net change recorded for the transaction
+// per (product, warehouse):
+//   - no rows at all → the source was never applied here, so it errors with
+//     notFoundMsg (a "...%d" format string; a Pub/Sub re-delivery then retries
+//     until the source event lands);
+//   - a net of zero → already canceled, so it does nothing;
+//   - a non-zero net → writes one reversing batch log per group that brings the
+//     transaction's net to zero, then restores rack placement once.
+//
+// reason supplies a fresh StockChange carrying only the reversal's reason (its
+// At/WarehouseId/TransactionId/Changes are filled in here). The net-zero guard
+// gates the whole operation (batch log/state and placement alike), so a second
+// cancel event re-reads a net of zero and skips everything.
+func reconstructCancel(
+	tx *gorm.DB,
+	transactionId uint64,
+	notFoundMsg string,
+	reason func() *inventory_iface.StockChange,
+) error {
+	type netRow struct {
+		ProductID   uint64
+		WarehouseID uint64
+		NetCount    int64
+		NetAmount   float64
+	}
+
+	// change * price reconstructs each row's signed value delta (Price is the
+	// per-unit cost, Change the signed count), so the sum is the net value moved.
+	var nets []netRow
+	err := tx.
+		Model(&inventory_models.StockBatchLog{}).
+		Select("product_id, warehouse_id, sum(change) as net_count, sum(change * price) as net_amount").
+		Where("transaction_id = ?", transactionId).
+		Group("product_id, warehouse_id").
+		Order("warehouse_id, product_id"). // deterministic, deadlock-safe lock order
+		Find(&nets).
+		Error
+	if err != nil {
+		return err
+	}
+	if len(nets) == 0 {
+		return fmt.Errorf(notFoundMsg, transactionId)
+	}
+
+	// Reverse the net per warehouse, skipping groups already at zero.
+	byWarehouse := map[uint64][]*inventory_iface.ChangeItem{}
+	warehouses := make([]uint64, 0, len(nets))
+	for _, n := range nets {
+		if n.NetCount == 0 {
+			continue
+		}
+		if _, ok := byWarehouse[n.WarehouseID]; !ok {
+			warehouses = append(warehouses, n.WarehouseID)
+		}
+		byWarehouse[n.WarehouseID] = append(byWarehouse[n.WarehouseID], &inventory_iface.ChangeItem{
+			ProductId:    n.ProductID,
+			ChangeCount:  -n.NetCount,
+			ChangeAmount: -n.NetAmount,
+		})
+	}
+	if len(byWarehouse) == 0 {
+		return nil // already canceled
+	}
+
+	now := time.Now()
+	batchProc := inventory_mutations.NewProcessStockBatchLog(tx)
+	for _, warehouseID := range warehouses {
+		change := reason()
+		change.At = timestamppb.New(now)
+		change.WarehouseId = warehouseID
+		change.TransactionId = transactionId
+		change.Changes = byWarehouse[warehouseID]
+		if _, err := batchProc(change); err != nil {
+			return err
+		}
+	}
+
+	// Placement re-derives the rack moves from invertory_histories by tx_id (the
+	// warehouse and change items are irrelevant to its rack list), so run it once
+	// per transaction to restore the racks the source had moved. Leaving Changes
+	// nil keeps the transfer reason's sign at its +1 default, which restores.
+	placement := reason()
+	placement.At = timestamppb.New(now)
+	placement.WarehouseId = warehouses[0]
+	placement.TransactionId = transactionId
+	_, err = inventory_mutations.NewProcessStockPlacementLog(tx)(placement)
+	return err
 }
 
 // applyStockLogs converts each warehouse StockChangeLog to an inventory
