@@ -13,20 +13,8 @@ type inventoryServiceImpl struct {
 	db *gorm.DB
 }
 
-// ProductBatchList implements [inventory_ifaceconnect.InventoryServiceHandler].
-func (s *inventoryServiceImpl) ProductBatchList(context.Context, *connect.Request[inventory_iface.ProductBatchListRequest]) (*connect.Response[inventory_iface.ProductBatchListResponse], error) {
-	panic("unimplemented")
-}
-
-// ProductPlacementList implements [inventory_ifaceconnect.InventoryServiceHandler].
-func (s *inventoryServiceImpl) ProductPlacementList(context.Context, *connect.Request[inventory_iface.ProductPlacementListRequest]) (*connect.Response[inventory_iface.ProductPlacementListResponse], error) {
-	panic("unimplemented")
-}
-
-// ProductPlacementLog implements [inventory_ifaceconnect.InventoryServiceHandler].
-func (s *inventoryServiceImpl) ProductPlacementLog(context.Context, *connect.Request[inventory_iface.ProductPlacementLogRequest]) (*connect.Response[inventory_iface.ProductPlacementLogResponse], error) {
-	panic("unimplemented")
-}
+// ProductBatchList, ProductPlacementList, and ProductPlacementLog are implemented
+// in product_batch_list.go / product_placement_list.go / product_placement_log.go.
 
 // StockMovement implements [inventory_ifaceconnect.InventoryServiceHandler].
 // func (s *inventoryServiceImpl) StockMovement(context.Context, *connect.Request[inventory_iface.StockMovementRequest]) (*connect.Response[inventory_iface.StockMovementResponse], error) {
