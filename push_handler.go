@@ -3,13 +3,16 @@ package inventory_service
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/pdcgo/event_source"
 	"github.com/pdcgo/inventory_service/inventory"
+	"github.com/pdcgo/inventory_service/inventory_models"
 	"github.com/pdcgo/san_collection/san_config"
 	warehouse_iface "github.com/pdcgo/schema/services/warehouse_iface/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type InventoryPushHandler event_source.PushHandler
@@ -22,18 +25,35 @@ func NewInventoryPushHandler(
 	projectCfg *san_config.ProjectConfig,
 ) InventoryPushHandler {
 	return func(ctx context.Context, msg *event_source.PushRequest) error {
-		switch msg.Subscription {
-		case projectCfg.PubsubSubscriberPath("inventory-stock-sub"):
-			var event warehouse_iface.StockEvent
-			if err := protojson.Unmarshal(msg.Message.Data, &event); err != nil {
-				return err
+		return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// Dedup first, atomically in the same transaction as the work: if this
+			// message was already applied the row exists and we skip; if the work
+			// below fails, the whole transaction (this row included) rolls back so a
+			// redelivery reprocesses it (exactly-once effect).
+			seen := inventory_models.InventoryExactlyOnceLog{
+				ID:           msg.Message.MessageID,
+				Subscription: msg.Subscription,
+				CreatedAt:    time.Now(),
 			}
-			return db.Transaction(func(tx *gorm.DB) error {
-				return inventory.ProcessStockEvent(tx, &event)
-			})
-		}
+			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&seen)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return nil // already processed
+			}
 
-		return nil
+			switch msg.Subscription {
+			case projectCfg.PubsubSubscriberPath("inventory-stock-sub"):
+				var event warehouse_iface.StockEvent
+				if err := protojson.Unmarshal(msg.Message.Data, &event); err != nil {
+					return err
+				}
+				return inventory.ProcessStockEvent(tx, &event)
+			}
+
+			return nil
+		})
 	}
 }
 

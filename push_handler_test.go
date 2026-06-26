@@ -60,6 +60,7 @@ func TestInventoryPushHandler(t *testing.T) {
 					&inventory_models.StockBatchLog{},
 					&inventory_models.StockPlacement{},
 					&inventory_models.StockPlacementLog{},
+					&inventory_models.InventoryExactlyOnceLog{},
 				))
 
 				projectCfg := &san_config.ProjectConfig{ProjectID: "test"}
