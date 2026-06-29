@@ -20,9 +20,13 @@ type StockState struct {
 
 type StockBatch struct {
 	ID          uint64 `gorm:"primarykey"`
-	ProductID   uint64
+	ProductID   uint64 `gorm:"index:uniq_stock_batch_code,unique,priority:1,where:batch_code <> ''"`
 	WarehouseID uint64
 	InboundID   uint64
+
+	// BatchCode is a business code for the inbound batch, unique per product
+	// (empty codes are exempt — the partial index ignores them).
+	BatchCode string `gorm:"index:uniq_stock_batch_code,priority:2"`
 
 	StartCount int64
 	EndCount   int64
