@@ -52,6 +52,7 @@ func TestPushStockEventRPC(t *testing.T) {
 					&invItemProblem{},
 					&skuRow{},
 					&inventory_models.StockState{},
+					&inventory_models.StockBatch{},
 					&inventory_models.StockBatchLog{},
 					&inventory_models.StockPlacement{},
 					&inventory_models.StockPlacementLog{},

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/pdcgo/inventory_service/inventory_models"
@@ -52,13 +53,95 @@ func ProcessStockEvent(tx *gorm.DB, event *warehouse_iface.StockEvent) error {
 }
 
 // applyTxItems expands a transaction's items into per-SKU StockChangeLogs of the
-// given warehouse change type and applies each to inventory stock state.
+// given warehouse change type and applies each to inventory stock state. For the
+// stock-entering change types it also records the inbound StockBatch(es).
 func applyTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface.StockChangeType) error {
 	logs, err := expandTxItems(tx, transactionId, changeType)
 	if err != nil {
 		return err
 	}
-	return applyStockLogs(tx, logs)
+	if err := applyStockLogs(tx, logs); err != nil {
+		return err
+	}
+	if isInboundChange(changeType) {
+		return createStockBatches(tx, transactionId, time.Now())
+	}
+	return nil
+}
+
+// isInboundChange reports whether a change type adds new on-hand stock under a fresh
+// inbound batch (restock/return/found-back/transfer-in) — the only ones that mint a
+// StockBatch. Outbound (order/problem) and the transfer OUT leg do not.
+func isInboundChange(t warehouse_iface.StockChangeType) bool {
+	switch t {
+	case warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_RESTOCK_ACCEPTED,
+		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_RETURN_ACCEPTED,
+		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_STOCK_FOUND_BACK,
+		warehouse_iface.StockChangeType_STOCK_CHANGE_TYPE_TRANSFER_WAREHOUSE_IN:
+		return true
+	}
+	return false
+}
+
+// createStockBatches records the inbound batch(es) of an inbound transaction: one
+// StockBatch per (product, warehouse), keyed by batch_code = inbound tx id, with
+// StartCount/EndCount from the summed inbound placement rows (the invertory_histories
+// rows where tx_id = in_tx_id, so already-shipped stock isn't netted out) and a
+// count-weighted landed unit price (price + ext_price). Idempotent: it skips if the
+// inbound already has batches, so a Pub/Sub redelivery or RPC retry doesn't duplicate.
+func createStockBatches(tx *gorm.DB, inboundTxID uint64, now time.Time) error {
+	var existing int64
+	if err := tx.Model(&inventory_models.StockBatch{}).
+		Where("inbound_id = ?", inboundTxID).Count(&existing).Error; err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	type batchRow struct {
+		WarehouseID uint64
+		ProductID   uint64
+		Count       int64
+		Price       float64
+	}
+	rows := []*batchRow{}
+	if err := tx.
+		Table("invertory_histories ih").
+		Joins("left join skus s on s.id = ih.sku_id").
+		Where("ih.in_tx_id = ? AND ih.tx_id = ih.in_tx_id", inboundTxID).
+		Group("ih.warehouse_id, s.product_id").
+		Select(
+			"ih.warehouse_id as warehouse_id",
+			"s.product_id as product_id",
+			"sum(ih.count) as count",
+			"sum(ih.count * (ih.price + coalesce(ih.ext_price, 0))) / nullif(sum(ih.count), 0) as price",
+		).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+
+	code := strconv.FormatUint(inboundTxID, 10)
+	for _, r := range rows {
+		if r.ProductID == 0 || r.Count <= 0 {
+			continue // unmapped sku / nothing inbound
+		}
+		batch := inventory_models.StockBatch{
+			ProductID:   r.ProductID,
+			WarehouseID: r.WarehouseID,
+			InboundID:   inboundTxID,
+			BatchCode:   code,
+			StartCount:  r.Count,
+			EndCount:    r.Count,
+			Price:       r.Price,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := tx.Create(&batch).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyTransfer resolves the WarehouseTransfer for a transfer event and applies its OUT leg

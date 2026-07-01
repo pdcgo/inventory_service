@@ -1,6 +1,9 @@
 package inventory_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -8,6 +11,7 @@ import (
 	"github.com/pdcgo/inventory_service/inventory"
 	"github.com/pdcgo/inventory_service/inventory_models"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
+	"github.com/pdcgo/schema/services/inventory_iface/v1/inventory_ifaceconnect"
 	"github.com/pdcgo/shared/db_models"
 	"github.com/pdcgo/shared/pkg/moretest"
 	"github.com/pdcgo/shared/pkg/moretest/moretest_mock"
@@ -29,6 +33,7 @@ func TestProductReconcileRPC(t *testing.T) {
 					&skuRow{}, // skus stand-in (defined in push_stock_event_test.go)
 					&inventory_models.StockState{},
 					&inventory_models.StockBatchLog{},
+					&inventory_models.StockBatch{},
 					&inventory_models.StockPlacement{},
 					&inventory_models.StockPlacementLog{},
 				))
@@ -61,12 +66,35 @@ func TestProductReconcileRPC(t *testing.T) {
 					ProductID: 5, WarehouseID: 9, RackID: 13, Count: 4, CreatedAt: at, UpdatedAt: at,
 				}).Error)
 
+				// Real streaming RPC, exercised through an in-process connect server so the
+				// server-stream path is covered end to end — connect's ServerStream has no
+				// exported constructor, so the handler can't be called directly. Mirrors
+				// user_service/user/team_sync_legacy_test.go.
 				svc := inventory.NewInventoryService(db)
-				_, err = svc.ProductReconcile(t.Context(), connect.NewRequest(&inventory_iface.ProductReconcileRequest{
-					ProductId:   5,
-					WarehouseId: 9,
-				}))
+				mux := http.NewServeMux()
+				mux.Handle(inventory_ifaceconnect.NewInventoryServiceHandler(svc))
+				srv := httptest.NewServer(mux)
+				defer srv.Close()
+				client := inventory_ifaceconnect.NewInventoryServiceClient(srv.Client(), srv.URL)
+
+				// reconcile runs ProductReconcile and returns how many progress lines streamed.
+				reconcile := func(productID, warehouseID uint64) (int, error) {
+					stream, err := client.ProductReconcile(context.Background(),
+						connect.NewRequest(&inventory_iface.ProductReconcileRequest{ProductId: productID, WarehouseId: warehouseID}))
+					if err != nil {
+						return 0, err
+					}
+					defer stream.Close()
+					n := 0
+					for stream.Receive() {
+						n++
+					}
+					return n, stream.Err()
+				}
+
+				n, err := reconcile(5, 9)
 				assert.NoError(t, err)
+				assert.Equal(t, 5, n) // "reconcile state" + 3 "reconcile placement" (racks 11/12/13) + "reconcile batch"
 
 				// StockState reconciled to legacy total.
 				var st inventory_models.StockState
@@ -91,14 +119,28 @@ func TestProductReconcileRPC(t *testing.T) {
 				assert.NoError(t, db.Model(&inventory_models.StockPlacementLog{}).Where("product_id = ?", uint64(5)).Count(&placementLogs).Error)
 				assert.Equal(t, int64(3), placementLogs) // racks 11, 12, 13
 
+				// StockBatch: one legacy batch per sku group at unit value 10
+				// (sku1 rack11+rack12 = 5+3 = 8; sku2 = 2).
+				var batches []inventory_models.StockBatch
+				assert.NoError(t, db.Where("product_id = ?", uint64(5)).Order("start_count desc").Find(&batches).Error)
+				assert.Len(t, batches, 2)
+				for _, b := range batches {
+					assert.Equal(t, float64(10), b.Price)
+					assert.Equal(t, b.StartCount, b.EndCount) // fresh legacy batch
+				}
+				assert.Equal(t, int64(8), batches[0].StartCount)
+				assert.Equal(t, int64(2), batches[1].StartCount)
+
 				t.Run("second run is a no-op", func(t *testing.T) {
-					_, err := svc.ProductReconcile(t.Context(), connect.NewRequest(&inventory_iface.ProductReconcileRequest{
-						ProductId: 5, WarehouseId: 9,
-					}))
+					n, err := reconcile(5, 9)
 					assert.NoError(t, err)
-					var n int64
-					assert.NoError(t, db.Model(&inventory_models.StockPlacementLog{}).Count(&n).Error)
-					assert.Equal(t, int64(3), n) // no new placement logs
+					assert.Equal(t, 5, n) // still streams progress, but writes no new logs/batches
+					var cnt int64
+					assert.NoError(t, db.Model(&inventory_models.StockPlacementLog{}).Count(&cnt).Error)
+					assert.Equal(t, int64(3), cnt) // no new placement logs
+					var batchCnt int64
+					assert.NoError(t, db.Model(&inventory_models.StockBatch{}).Count(&batchCnt).Error)
+					assert.Equal(t, int64(2), batchCnt) // OnConflict DoNothing → no duplicate batches
 				})
 			})
 		},

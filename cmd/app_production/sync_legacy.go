@@ -65,18 +65,24 @@ func NewSyncLegacyFunc(
 
 				go func() {
 					defer wg.Done()
-					_, err = client.ProductReconcile(
+					stream, err := client.ProductReconcile(
 						ctx,
-						&connect.Request[inventory_iface.ProductReconcileRequest]{
-							Msg: &inventory_iface.ProductReconcileRequest{
-								ProductId:   item.ProductID,
-								WarehouseId: item.WarehouseID,
-							},
-						},
+						connect.NewRequest(&inventory_iface.ProductReconcileRequest{
+							ProductId:   item.ProductID,
+							WarehouseId: item.WarehouseID,
+						}),
 					)
-
 					if err != nil {
 						slog.Error("error process sync", "err", err.Error())
+					} else {
+						for stream.Receive() {
+							msg := stream.Msg()
+							slog.Info(msg.Message)
+						}
+						if err := stream.Err(); err != nil {
+							slog.Error("error process sync", "err", err.Error())
+						}
+						stream.Close()
 					}
 
 					<-limit

@@ -32,6 +32,7 @@ func TestInventoryPushHandlerExactlyOnce(t *testing.T) {
 					&invItemProblem{},
 					&placementSku{},
 					&inventory_models.StockState{},
+					&inventory_models.StockBatch{},
 					&inventory_models.StockBatchLog{},
 					&inventory_models.InventoryExactlyOnceLog{},
 				))
