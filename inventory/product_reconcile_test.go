@@ -94,7 +94,9 @@ func TestProductReconcileRPC(t *testing.T) {
 
 				n, err := reconcile(5, 9)
 				assert.NoError(t, err)
-				assert.Equal(t, 5, n) // "reconcile state" + 3 "reconcile placement" (racks 11/12/13) + "reconcile batch"
+				// "reconcile state" (1) + "reconcile placement" x3 (racks 11/12/13) +
+				// "reconciling batch" x2 (sku1/sku2 legacy batches) + "reconcile batch success" (1).
+				assert.Equal(t, 7, n)
 
 				// StockState reconciled to legacy total.
 				var st inventory_models.StockState
@@ -134,7 +136,7 @@ func TestProductReconcileRPC(t *testing.T) {
 				t.Run("second run is a no-op", func(t *testing.T) {
 					n, err := reconcile(5, 9)
 					assert.NoError(t, err)
-					assert.Equal(t, 5, n) // still streams progress, but writes no new logs/batches
+					assert.Equal(t, 7, n) // still streams progress, but writes no new logs/batches
 					var cnt int64
 					assert.NoError(t, db.Model(&inventory_models.StockPlacementLog{}).Count(&cnt).Error)
 					assert.Equal(t, int64(3), cnt) // no new placement logs
