@@ -10,6 +10,11 @@ const (
 	InvTxReturn    InventoryTxType = "return"
 	InvTxFoundBack InventoryTxType = "found_back"
 	InvTxProblem   InventoryTxType = "problem"
+	// Warehouse-to-warehouse transfer legs (InventoryService Transfer* RPCs).
+	InvTxTransferOut InventoryTxType = "transfer_out"
+	InvTxTransferIn  InventoryTxType = "transfer_in"
+	// Stock-take adjustment minted by OpnameComplete (InventoryService Opname* RPCs).
+	InvTxOpname InventoryTxType = "opname"
 )
 
 type InventoryTxStatus string

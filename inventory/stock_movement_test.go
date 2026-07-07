@@ -118,6 +118,38 @@ func TestStockMovement(t *testing.T) {
 					assert.Equal(t, "User One", fData.TransactionInfo.UserName)
 
 				})
+
+				// time_range is epoch microseconds; zero start/end = unbounded side.
+				t.Run("time_range filters by created_at", func(t *testing.T) {
+					// Window covering only the newer row (ID 20 at now-40m).
+					data, err := service.StockMovement(t.Context(), &connect.Request[inventory_iface.StockMovementRequest]{
+						Msg: &inventory_iface.StockMovementRequest{
+							WarehouseId: 1,
+							ProductId:   1,
+							TimeRange: &common.TimeFilter{
+								StartDate: time.Now().Add(-50 * time.Minute).UnixMicro(),
+								EndDate:   time.Now().UnixMicro(),
+							},
+							Page: &common.PageFilter{Page: 1, Limit: 10},
+						}})
+					assert.NoError(t, err)
+					assert.Len(t, data.Msg.Movements, 1)
+					assert.Equal(t, uint64(20), data.Msg.Movements[0].Id)
+
+					// Window entirely before both rows → nothing.
+					data, err = service.StockMovement(t.Context(), &connect.Request[inventory_iface.StockMovementRequest]{
+						Msg: &inventory_iface.StockMovementRequest{
+							WarehouseId: 1,
+							ProductId:   1,
+							TimeRange: &common.TimeFilter{
+								StartDate: time.Now().Add(-3 * time.Hour).UnixMicro(),
+								EndDate:   time.Now().Add(-2 * time.Hour).UnixMicro(),
+							},
+							Page: &common.PageFilter{Page: 1, Limit: 10},
+						}})
+					assert.NoError(t, err)
+					assert.Len(t, data.Msg.Movements, 0)
+				})
 			})
 
 		},

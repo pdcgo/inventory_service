@@ -41,6 +41,7 @@ type StockPlacementLog struct {
 	ChangeType   inventory_iface.StockChangeType
 	Change       int64
 	BalanceCount int64
+	Note         string
 
 	CreatedAt time.Time
 }

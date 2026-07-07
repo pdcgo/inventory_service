@@ -91,5 +91,60 @@ func (s *inventoryServiceImpl) ProductDetail(
 		return nil, err
 	}
 
+	// Ongoing (in-transit) inbound/outbound for this product+warehouse — pending docs only
+	// (accepted/canceled are already reflected in StockState, so they must NOT count).
+	pid := pay.GetProductId()
+	wid := pay.GetWarehouseId()
+	sumSelect := "COALESCE(SUM(x.count), 0) AS count, COALESCE(SUM(x.count * x.price), 0) AS amount"
+
+	var restockAgg ongoingAgg
+	err = db.
+		Table("inventory_restock_items x").
+		Joins("JOIN inventory_restocks r ON r.id = x.restock_id").
+		Where("r.warehouse_id = ? AND x.product_id = ? AND r.status IN ?", wid, pid,
+			[]inventory_models.RestockStatus{inventory_models.RestockPending, inventory_models.RestockProblem}).
+		Select(sumSelect).
+		Scan(&restockAgg).
+		Error
+	if err != nil {
+		return nil, err
+	}
+	resp.OngoingRestockCount = restockAgg.Count
+	resp.OngoingRestockAmount = restockAgg.Amount
+
+	var transferOutAgg ongoingAgg
+	err = db.
+		Table("inventory_transfer_items x").
+		Joins("JOIN inventory_transfers t ON t.id = x.transfer_id").
+		Where("t.from_warehouse_id = ? AND x.product_id = ? AND t.status = ?", wid, pid, inventory_models.TransferPending).
+		Select(sumSelect).
+		Scan(&transferOutAgg).
+		Error
+	if err != nil {
+		return nil, err
+	}
+	resp.OngoingTransferOutCount = transferOutAgg.Count
+	resp.OngoingTransferOutAmount = transferOutAgg.Amount
+
+	var transferInAgg ongoingAgg
+	err = db.
+		Table("inventory_transfer_items x").
+		Joins("JOIN inventory_transfers t ON t.id = x.transfer_id").
+		Where("t.to_warehouse_id = ? AND x.product_id = ? AND t.status = ?", wid, pid, inventory_models.TransferPending).
+		Select(sumSelect).
+		Scan(&transferInAgg).
+		Error
+	if err != nil {
+		return nil, err
+	}
+	resp.OngoingTransferInCount = transferInAgg.Count
+	resp.OngoingTransferInAmount = transferInAgg.Amount
+
 	return connect.NewResponse(resp), nil
+}
+
+// ongoingAgg is the count+amount rollup for a set of pending restock/transfer items.
+type ongoingAgg struct {
+	Count  int64
+	Amount float64
 }

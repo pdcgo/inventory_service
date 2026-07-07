@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/pdcgo/inventory_service/inventory_models"
@@ -15,7 +16,8 @@ import (
 
 // ProductPlacementLog implements [inventory_ifaceconnect.InventoryServiceHandler].
 // It returns the placement change history of a product within a warehouse, most
-// recent first, optionally filtered to a single rack.
+// recent first, optionally filtered to a single rack and/or a created_at window
+// (time_range is epoch microseconds; zero start/end = unbounded side).
 func (s *inventoryServiceImpl) ProductPlacementLog(
 	ctx context.Context,
 	req *connect.Request[inventory_iface.ProductPlacementLogRequest],
@@ -37,6 +39,14 @@ func (s *inventoryServiceImpl) ProductPlacementLog(
 			d = d.Where("product_id = ? AND warehouse_id = ?", pay.ProductId, pay.WarehouseId)
 			if pay.RackId > 0 {
 				d = d.Where("rack_id = ?", pay.RackId)
+			}
+			if pay.TimeRange != nil {
+				if pay.TimeRange.StartDate > 0 {
+					d = d.Where("created_at >= ?", time.UnixMicro(pay.TimeRange.StartDate).Local())
+				}
+				if pay.TimeRange.EndDate > 0 {
+					d = d.Where("created_at <= ?", time.UnixMicro(pay.TimeRange.EndDate).Local())
+				}
 			}
 			return d
 		}), nil
@@ -63,6 +73,7 @@ func (s *inventoryServiceImpl) ProductPlacementLog(
 			ChangeType:    r.ChangeType,
 			Change:        r.Change,
 			BalanceCount:  r.BalanceCount,
+			Note:          r.Note,
 			CreatedAt:     timestamppb.New(r.CreatedAt),
 		})
 	}

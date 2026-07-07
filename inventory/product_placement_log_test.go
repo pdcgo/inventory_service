@@ -70,6 +70,42 @@ func TestProductPlacementLog(t *testing.T) {
 						assert.Equal(t, uint64(41), l.RackId)
 					}
 				})
+
+				// time_range is epoch microseconds; zero start/end = unbounded side.
+				t.Run("optional time_range filter", func(t *testing.T) {
+					// Window covering the seed timestamp → all rows.
+					res, err := svc.ProductPlacementLog(ctx, connect.NewRequest(&inventory_iface.ProductPlacementLogRequest{
+						ProductId: 5, WarehouseId: 9,
+						TimeRange: &common.TimeFilter{
+							StartDate: at.Add(-time.Hour).UnixMicro(),
+							EndDate:   at.Add(time.Hour).UnixMicro(),
+						},
+						Page: &common.PageFilter{Page: 1, Limit: 10},
+					}))
+					assert.NoError(t, err)
+					assert.Len(t, res.Msg.Logs, 3)
+
+					// Window entirely after the seed timestamp → nothing.
+					res, err = svc.ProductPlacementLog(ctx, connect.NewRequest(&inventory_iface.ProductPlacementLogRequest{
+						ProductId: 5, WarehouseId: 9,
+						TimeRange: &common.TimeFilter{
+							StartDate: at.Add(time.Hour).UnixMicro(),
+							EndDate:   at.Add(2 * time.Hour).UnixMicro(),
+						},
+						Page: &common.PageFilter{Page: 1, Limit: 10},
+					}))
+					assert.NoError(t, err)
+					assert.Len(t, res.Msg.Logs, 0)
+
+					// Open-ended start (end only) before the seed → nothing.
+					res, err = svc.ProductPlacementLog(ctx, connect.NewRequest(&inventory_iface.ProductPlacementLogRequest{
+						ProductId: 5, WarehouseId: 9,
+						TimeRange: &common.TimeFilter{EndDate: at.Add(-time.Hour).UnixMicro()},
+						Page:      &common.PageFilter{Page: 1, Limit: 10},
+					}))
+					assert.NoError(t, err)
+					assert.Len(t, res.Msg.Logs, 0)
+				})
 			})
 		})
 }

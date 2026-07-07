@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/pdcgo/schema/services/common/v1"
@@ -36,6 +37,16 @@ func (s *inventoryServiceImpl) StockMovement(ctx context.Context, req *connect.R
 		Order("created_at DESC").
 		Where("s.warehouse_id = ?", req.Msg.WarehouseId).
 		Where("s.product_id = ?", req.Msg.ProductId)
+
+	// created_at window (time_range is epoch microseconds; zero = unbounded side).
+	if req.Msg.TimeRange != nil {
+		if req.Msg.TimeRange.StartDate > 0 {
+			query = query.Where("s.created_at >= ?", time.UnixMicro(req.Msg.TimeRange.StartDate).Local())
+		}
+		if req.Msg.TimeRange.EndDate > 0 {
+			query = query.Where("s.created_at <= ?", time.UnixMicro(req.Msg.TimeRange.EndDate).Local())
+		}
+	}
 
 	if req.Msg.Page.Page > 0 {
 		query = query.Offset(int((req.Msg.Page.Page - 1) * req.Msg.Page.Limit))

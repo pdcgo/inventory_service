@@ -1,5 +1,5 @@
 
-# Inventory Service
+# Inventory Service.
 This Is part of Submodule of [Warehouse Infra](https://github.com/pdcgo/warehouse_infra). In Warehouse Infra this is live in folder `./inventory_service`.<br>
 This Service planned and Intended for replacing legacy Inventory System that exists in Warehouse Infra. Its planned for microservice and planned to more dependentless, separating domain purpose for better developing big and complex system that exists in Warehouse Infra.<br>
 For now its just be candidate for Take over Inventory System In Warehouse Infra legacy.
@@ -8,6 +8,16 @@ Status for this development is still in progress and not completely take over le
 1. for proto definition schema guideline read this [Proto Schema Guideline](proto-guideline.md).
 2. for database schema related, read this [Database Schema](database-schema.md).
 3. for Summary, Status, and Progress of Development read this [Development Summary](development-summary.md).
+4. for Feature Brief. [Read This](feature-brief.md)
+
+## Under Brainstorming and not final
+1. how serve average performace status change
+
+
+## Authentication & Authorization.
+1. Use v2 roling system. not legacy system. for complete reference read [this](../../user_service/docs/readme.md#authentication--authorization)
+2. use interceptor that live in [here](../../user_service/access_interceptors/interceptor.go)
+3. DON'T use legacy interface on [this](../../shared/interfaces/authorization_iface/authorization.go)
 
 
 ## Connect RPC Spec
@@ -16,6 +26,7 @@ Status for this development is still in progress and not completely take over le
 1. Transaction Related RPC
 	- Create Transaction that named `TransactionCreate`
 	- Cancel Transaction that named `TransactionCancel`
+	
 
 2. Product Related RPC.
 	
@@ -31,14 +42,48 @@ Status for this development is still in progress and not completely take over le
 	- rpc for deleting the rack that named `RackDelete`
 	- rpc for getting detail the rack that named `RackDetail`
 	- rpc for getting rack list that named `RackList`
+	- rpc for getting rack by ids that named `RackByIds`
 
 6. Placements RPC
+	- rpc for move placement that named `PlacementMove`
+
+
 7. Order RPC
-8. Inbound RPC
+
+8. Restock Related RPC
+	- rpc for creating restock that named `RestockCreate`
+	- rpc for updating restock that named `RestockUpdate`.<br>
+		- including change status, cancel and other.
+	- rpc for getting detail restock that named `RestockDetail`
+	- rpc for getting restock list that named `RestockList`
+	- rpc for getting log history restock. This is usable for audit. this rpc named `RestockLogList`
+	- for further implementation [Read This](./restock-implementation.md).
+
 9. Opname RPC
 
-## Under Brainstorming and not final
-1. how serve average performace status change
+10. Transfer Stock Between Warehouse RPC.
+	- rpc for creating transfer that named `TransferCreate`
+	- rpc for canceling transfer that named `TransferCancel`
+	- rpc for accepting transfer that named `TransferAccept`
+	- rpc for getting detail the Transfer that named `TransferDetail`
+	- rpc for getting Transfer list that named `TransferList`
+
+
+### RPC Placements
+1. rpc `PlacementMove` can be multiple. for example:
+```
+message PlacementItem {
+	uint64 product_id
+	uint64 from_rack_id
+	uint64 to_rack_id
+}
+
+message PlacementMove {
+	uint64 warehouse_id
+	repeated PlacementItem placements
+	string note
+}	
+```
 
 
 ### RPC Create Transaction
@@ -99,9 +144,6 @@ this rpc used for updating `ProductConfig` that getted in rpc `ProductConfig`
 		- Stock Ready Amount
 
 
-
-
-
 ### RPC Rack Management
 1. rpc `RackList` data that can be loaded is :	
 	- General Info:
@@ -121,7 +163,34 @@ this rpc used for updating `ProductConfig` that getted in rpc `ProductConfig`
 
 3. all rpc rack management except `RackList` is always scoping by warehouse_id
 
+#### Rack Info for preloading other service RPC
+1. All authenticated user can access `RackByIds`
 
+
+
+
+### RPC Transfer Stock Between Warehouse
+Transfer is a **two-legged, in-transit workflow document** (mirroring the legacy
+`WarehouseTransfer` semantics): the stock leaves the source when the transfer is created and
+enters the destination only when it is accepted.
+
+1. lifecycle (`TransferStatus`): `PENDING` (in transit) -> `ACCEPTED` / `CANCELED`.
+	- `TransferCreate` applies the **OUT leg** at the source immediately (an
+	  `InventoryTransaction{transfer_out}`; stock exits `StockState`). Item prices are
+	  **derived from the source `StockState` average** (`stock_ready_amount / stock_ready`),
+	  so value is conserved — the request carries no price.
+	- `TransferAccept` applies the **IN leg** at the destination
+	  (`InventoryTransaction{transfer_in}`; stock enters + a `StockBatch` is minted at the
+	  derived prices). Idempotent.
+	- `TransferCancel` is **pre-accept only**: it reverses the OUT leg so the source gets its
+	  stock back. An accepted transfer cannot be canceled — send a transfer in the opposite
+	  direction instead. Idempotent.
+2. `TransferList` follows the flexible list convention (`proto-guideline.md`): data types
+	`GENERAL` (from/to warehouse + names, status, created/accepted) + `TOTAL`
+	(item_count/amount), sort oneof (created | amount/item_count), filters `warehouse_id`
+	(**matches either side**), from/to warehouse, team_id, status.
+3. `TransferDetail` returns the header (with warehouse names + both leg transaction ids) and
+	items with product names.
 
 ### resync batch
 

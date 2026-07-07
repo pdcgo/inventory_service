@@ -26,6 +26,11 @@ func TestProductDetail(t *testing.T) {
 					&inventory_models.StockBatch{},
 					&inventory_models.StockPlacement{},
 					&inventory_models.ProductConfig{},
+					// ongoing restock/transfer aggregation sources.
+					&inventory_models.InventoryRestock{},
+					&inventory_models.InventoryRestockItem{},
+					&inventory_models.InventoryTransfer{},
+					&inventory_models.InventoryTransferItem{},
 					&productRow{},
 					&teamRow{},
 				))
@@ -73,6 +78,40 @@ func TestProductDetail(t *testing.T) {
 					assert.NoError(t, err)
 					assert.Equal(t, inventory_iface.QueueType_QUEUE_TYPE_LIFO, res.Msg.QueueType)
 					assert.True(t, res.Msg.Configured)
+				})
+
+				t.Run("ongoing restock + transfer counts pending docs only", func(t *testing.T) {
+					// pending restock into whs 9 (counts) + an accepted one (must NOT count).
+					assert.NoError(t, db.Create(&[]inventory_models.InventoryRestock{
+						{ID: 101, WarehouseID: 9, TeamID: 2, Status: inventory_models.RestockPending},
+						{ID: 102, WarehouseID: 9, TeamID: 2, Status: inventory_models.RestockAccepted},
+					}).Error)
+					assert.NoError(t, db.Create(&[]inventory_models.InventoryRestockItem{
+						{RestockID: 101, ProductID: 5, Count: 7, Price: 10}, // ongoing: +7 / +70
+						{RestockID: 101, ProductID: 6, Count: 2, Price: 10}, // other product, excluded
+						{RestockID: 102, ProductID: 5, Count: 5, Price: 10}, // accepted, excluded
+					}).Error)
+
+					// pending transfer out (from 9) + in (to 9) + a canceled one (excluded).
+					assert.NoError(t, db.Create(&[]inventory_models.InventoryTransfer{
+						{ID: 201, FromWarehouseID: 9, ToWarehouseID: 8, Status: inventory_models.TransferPending},
+						{ID: 202, FromWarehouseID: 7, ToWarehouseID: 9, Status: inventory_models.TransferPending},
+						{ID: 203, FromWarehouseID: 9, ToWarehouseID: 8, Status: inventory_models.TransferCanceled},
+					}).Error)
+					assert.NoError(t, db.Create(&[]inventory_models.InventoryTransferItem{
+						{TransferID: 201, ProductID: 5, Count: 3, Price: 20}, // out: +3 / +60
+						{TransferID: 202, ProductID: 5, Count: 4, Price: 5},  // in:  +4 / +20
+						{TransferID: 203, ProductID: 5, Count: 9, Price: 20}, // canceled, excluded
+					}).Error)
+
+					res, err := svc.ProductDetail(t.Context(), connect.NewRequest(&inventory_iface.ProductDetailRequest{ProductId: 5, WarehouseId: 9}))
+					assert.NoError(t, err)
+					assert.Equal(t, int64(7), res.Msg.OngoingRestockCount)
+					assert.Equal(t, float64(70), res.Msg.OngoingRestockAmount)
+					assert.Equal(t, int64(3), res.Msg.OngoingTransferOutCount)
+					assert.Equal(t, float64(60), res.Msg.OngoingTransferOutAmount)
+					assert.Equal(t, int64(4), res.Msg.OngoingTransferInCount)
+					assert.Equal(t, float64(20), res.Msg.OngoingTransferInAmount)
 				})
 
 				t.Run("untracked product is not found", func(t *testing.T) {
