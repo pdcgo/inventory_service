@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/pdcgo/inventory_service/inventory_models"
+	"github.com/pdcgo/inventory_service/inventory_mutations"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
 	"gorm.io/gorm"
 )
@@ -54,6 +55,16 @@ func (s *inventoryServiceImpl) TransactionCancel(
 						Change: &inventory_iface.StockChange_Adjustment{Adjustment: &inventory_iface.Adjustment{}},
 					}
 				})
+			if err != nil {
+				return err
+			}
+
+			// Reverse any EXPLICIT placement logs the transaction wrote (the ORDER kind
+			// auto-picks racks at create). Nets the tx's placement logs per (product,
+			// rack) and negates them — no-op for transactions without placements, and
+			// idempotent.
+			err = inventory_mutations.ReverseTransactionPlacements(tx, pay.GetTransactionId(),
+				inventory_iface.StockChangeType_STOCK_CHANGE_TYPE_ORDER_CANCELED, time.Now())
 			if err != nil {
 				return err
 			}

@@ -5,6 +5,44 @@ Running log of status, progress, and decisions. Update this after any inventory_
 
 ---
 
+## 2026-07-08 — TransactionCreate ORDER kind: avg-cost valuation, hard reject, auto rack-pick; cancel reverses placements — DONE
+
+Extensions for the selling v3 OrderService (Flow A — design: plans/brainstroming.md), all
+scoped to the ORDER kind (other kinds unchanged):
+
+- **Proto** — `TransactionCreateResponse` gained `repeated TransactionCostItem items`
+  (`product_id, count, unit_cost, total_cost`): the ORDER kind returns the average-cost
+  valuation of the stock-out (the order service derives cross-team product fees from it);
+  other kinds echo the caller price.
+- **[inventory/transaction_order.go](../inventory/transaction_order.go)** (new) —
+  `applyOrderOutbound`: FOR-UPDATE locks the `stock_states` rows, **hard-rejects**
+  insufficient ready stock (`FailedPrecondition` — no negative guard exists in the shared
+  engine, deliberately: problem/adjustment/transfer legitimately go negative), values
+  items + `ChangeAmount` at `stock_ready_amount/stock_ready` (caller price ignored — it's
+  the SELLING price and would corrupt StockState with margin), then
+  `applyOrderPlacements`: per product reads `ProductConfig.placement_picking` (default
+  SMALLER), drains racks `count ASC|DESC` greedily, applies
+  `ApplyExplicitPlacements(..., ORDER_CREATED, ...)` — the placement logs double as the
+  warehouse **pick list**. Placement shortfall vs state (pre-existing drift) consumes
+  what exists (Opname corrects) — not an error.
+- **[inventory/transaction_cancel.go](../inventory/transaction_cancel.go)** — now also
+  calls `ReverseTransactionPlacements(..., ORDER_CANCELED, ...)` (idempotent, no-op for
+  transactions without placements) — without it, canceled orders would leak placement
+  decrements.
+- **Tests** — transaction_test.go reworked: order subtests seed stock via restock first
+  (ordering against empty stock now correctly rejects); new coverage: avg-cost valuation +
+  response items + caller-price-ignored, SMALLER default picking with cross-rack spill,
+  BIGGER config picking, placement-shortfall drift, short-stock + unknown-product rejects,
+  cancel restores state AND placements (ORDER_CANCELED log, idempotent). Full inventory +
+  mutations suites green.
+- Side fix: [invoice_service/invoice_v2/overview.go](../../invoice_service/invoice_v2/overview.go)
+  did not compile against the current schema (`total_payable/receivable` became message
+  types in v2_overview.proto) — wrapped the sums in the new item messages
+  (behavior-preserving bridge; the `change` breakdown stays empty until the owner's
+  timeline work fills it).
+
+---
+
 ## 2026-07-07 — Opname: per-line reason type (lost/broken/disaster) + note — DONE
 
 Guideline addendum ("Under `Opnames`"): counted lines carry an optional **reason** + **note**

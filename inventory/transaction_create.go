@@ -19,8 +19,12 @@ import (
 // records a request-driven, inventory-owned stock mutation and applies it to
 // StockState (+ mints a StockBatch for inbound kinds) in one transaction. The five
 // kinds map to the existing StockChange reasons (which supply the +/- direction):
-// order/problem decrement; restock/return/found_back increment. Per-rack
-// StockPlacement is intentionally not touched in this version.
+// order/problem decrement; restock/return/found_back increment.
+//
+// The ORDER kind (see applyOrderOutbound) additionally: values the stock-out at the
+// warehouse's AVERAGE COST (ignoring the caller price), hard-rejects insufficient
+// stock, and auto-picks racks per ProductConfig as ORDER_CREATED placement logs.
+// Other kinds still leave per-rack StockPlacement untouched.
 func (s *inventoryServiceImpl) TransactionCreate(
 	ctx context.Context,
 	req *connect.Request[inventory_iface.TransactionCreateRequest],
@@ -77,7 +81,20 @@ func (s *inventoryServiceImpl) TransactionCreate(
 			}
 			txID := trx.ID
 
+			// The ORDER kind has its own path: average-cost valuation, short-stock
+			// hard-reject, and per-rack auto-picking (Flow A).
+			if txType == inventory_models.InvTxOrder {
+				costItems, err := applyOrderOutbound(tx, txID, pay.GetWarehouseId(), items, now)
+				if err != nil {
+					return err
+				}
+				resp.TransactionId = txID
+				resp.Items = costItems
+				return nil
+			}
+
 			changes := make([]*inventory_iface.ChangeItem, 0, len(items))
+			costItems := make([]*inventory_iface.TransactionCostItem, 0, len(items))
 			for _, it := range items {
 				item := inventory_models.InventoryTransactionItem{
 					TransactionID: txID,
@@ -93,6 +110,12 @@ func (s *inventoryServiceImpl) TransactionCreate(
 					ProductId:    it.GetProductId(),
 					ChangeCount:  it.GetCount(), // magnitude; the reason supplies the sign
 					ChangeAmount: float64(it.GetCount()) * it.GetPrice(),
+				})
+				costItems = append(costItems, &inventory_iface.TransactionCostItem{
+					ProductId: it.GetProductId(),
+					Count:     it.GetCount(),
+					UnitCost:  it.GetPrice(), // non-order kinds echo the caller price
+					TotalCost: float64(it.GetCount()) * it.GetPrice(),
 				})
 			}
 
@@ -116,6 +139,7 @@ func (s *inventoryServiceImpl) TransactionCreate(
 			}
 
 			resp.TransactionId = txID
+			resp.Items = costItems
 			return nil
 		})
 	if err != nil {
