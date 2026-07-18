@@ -5,6 +5,45 @@ Running log of status, progress, and decisions. Update this after any inventory_
 
 ---
 
+## 2026-07-18 — 3 batch load-by-ids RPCs (transaction / transaction item / product by sku) — DONE
+
+Three "load Data By IDs" RPCs added to `InventoryService` (docs/proto-guideline.md pattern, à la
+`RackByIds`), for preloading detail in other UIs. Named without a `Get` prefix to match `RackByIds`.
+
+- **[schema/inventory_iface/v1/service.proto](../../schema/inventory_iface/v1/service.proto)** —
+  three RPCs, each `option request_policy = {allow_only_authenticated: true}`, request `repeated
+  ids` (cap 100), response a map keyed by id:
+  - `TransactionByIds` → `map<uint64, TransactionDetail{id, extern_order_id, receipt}>`. Fields
+    read directly off `InvTransaction` (`ExternOrdID` col `extern_ord_id`; `Receipt`); non-deleted only.
+  - `TransactionItemByIds` → `map<uint64, TransactionItemDetail{id, inv_transaction_id, sku_id,
+    count, price, total}>`. All fields on `InvTxItem`.
+  - `ProductBySkuIds` → `map<string, ProductBySkuDetail{id, name, ref_id, image}>` **keyed by
+    string sku_id** (SkuID is an encoded string, not uint).
+- **Handlers** ([inventory/get_transaction_by_ids.go](../inventory/get_transaction_by_ids.go),
+  [get_transaction_item_by_ids.go](../inventory/get_transaction_item_by_ids.go),
+  [get_product_by_sku_ids.go](../inventory/get_product_by_sku_ids.go)) — implemented
+  (`WHERE id IN ?` → map). No manual registration. Filenames keep the `get_` prefix; the RPC/method
+  names dropped it.
+
+Design decisions (owner-confirmed):
+- `sku_id` is a string → request `repeated string`, response `map<string, ...>`. `ProductBySkuIds`
+  decodes each sku_id via `SkuID.Extract().ProductID` (no `skus` table hit), batch-loads the
+  products, then keys the result back by sku_id. Undecodable / missing-product sku ids are omitted.
+- `Product.Image` is a JSON string array → RPC returns the **first** element (empty when none).
+- `Product.RefID` returned as the **raw** string (no `.ExtractData()`).
+- Auth is proto-declared only (no handler auth call), matching `RackByIds`; inert until the v2
+  interceptor is mounted.
+
+Tests: [inventory/get_by_ids_test.go](../inventory/get_by_ids_test.go) — one per handler (moretest,
+minimal `TableName()` stand-ins to dodge the association cascade). `ProductBySkuIds` builds real sku
+ids via `NewSkuID` so the `Extract()` decode path is exercised, and asserts deleted / missing-product
+/ undecodable sku ids are omitted and `image` is the first array element.
+
+Verified: `make proto-gen`, schema + inventory_service `go build`, `go vet ./inventory/`, and the full
+`go test ./inventory/` — all pass.
+
+---
+
 ## 2026-07-08 — TransactionCreate ORDER kind: avg-cost valuation, hard reject, auto rack-pick; cancel reverses placements — DONE
 
 Extensions for the selling v3 OrderService (Flow A — design: plans/brainstroming.md), all

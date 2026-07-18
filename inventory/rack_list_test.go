@@ -11,6 +11,7 @@ import (
 	"github.com/pdcgo/shared/pkg/moretest"
 	"github.com/pdcgo/shared/pkg/moretest/moretest_mock"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -27,6 +28,8 @@ type productRow struct {
 	ID      uint64 `gorm:"primarykey"`
 	TeamID  uint
 	Name    string
+	RefID   string
+	Image   datatypes.JSONSlice[string]
 	Deleted bool
 }
 
