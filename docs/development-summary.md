@@ -5,6 +5,41 @@ Running log of status, progress, and decisions. Update this after any inventory_
 
 ---
 
+## 2026-07-18 — TransactionProblemItemByTxItemIds — DONE
+
+Fourth batch load-by-ids RPC, sibling of `TransactionItemByIds` but over a different table and
+keyed differently.
+
+- **Proto** — `TransactionProblemItemByTxItemIds`: request `repeated tx_item_ids` (cap 100),
+  response `map<uint64, TransactionProblemItemDetail{id, tx_item_id, sku_id, problem_type,
+  problem_note, count}>` **keyed by tx_item_id** (not by the problem row's own id).
+- **[inventory/transaction_problem_item_by_tx_item_ids.go](../inventory/transaction_problem_item_by_tx_item_ids.go)**
+  — reads `inv_item_problems` by **raw table name** with a local scan struct, matching how
+  `process_stock_event.go` already joins that table. `inv_item_problems` is owned by
+  warehouse_service, and inventory_service has no dependency on that module — adding one just for a
+  model would be the wrong trade.
+
+- `problem_type` is a typed enum, not a raw string: `ProblemType` mirrors the stored
+  `ware_db.ProblemType` values (`broken_s, lost_s, diff_s, broken_w, lost_w, disaster, sample`),
+  mapped in the handler via a `problemTypes` lookup.
+
+Decisions:
+- One tx item may carry several problem rows (different problem types). Owner chose a flat
+  `map<uint64, Detail>` rather than a list, so rows are read `ORDER BY id ASC` and the **highest id
+  wins deterministically** (documented in the proto and covered by a test).
+- Column is `problem_type` (the model's `json:"broken_type"` tag is JSON-only) — verified against
+  the existing `invoice_service` and `selling_service` queries.
+- Enum values come from `ware_db.ProblemType` (7 canonical constants), **not** the 11-value
+  `WarehouseProblemType` in `problem_product_list_warehouse.go` — those extra four (`broken_r`,
+  `lost_r`, `broken`, `lost`) appear only in that legacy view as filter categories, with no evidence
+  they are ever written to the column. The column stays free-form text, so an unrecognised value
+  degrades to `PROBLEM_TYPE_UNSPECIFIED` instead of erroring (covered by a test seeding `broken_r`).
+- Test stand-in `invItemProblem` in push_stock_event_test.go gained the columns this RPC reads.
+
+Verified: `make proto-gen`, `go build`, `go vet ./inventory/`, full `go test ./inventory/` — all pass.
+
+---
+
 ## 2026-07-18 — 3 batch load-by-ids RPCs (transaction / transaction item / product by sku) — DONE
 
 Three "load Data By IDs" RPCs added to `InventoryService` (docs/proto-guideline.md pattern, à la

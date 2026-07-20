@@ -19,9 +19,12 @@ import (
 // stand-ins so the expansion/placement queries (left join inv_item_problems / skus)
 // resolve without pulling those models' association graphs into the test.
 type invItemProblem struct {
-	ID       uint `gorm:"primarykey"`
-	TxItemID uint
-	Count    int
+	ID          uint `gorm:"primarykey"`
+	TxItemID    uint
+	SkuID       db_models.SkuID
+	ProblemType string
+	ProblemNote string
+	Count       int
 }
 
 func (invItemProblem) TableName() string { return "inv_item_problems" }

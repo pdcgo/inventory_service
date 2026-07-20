@@ -100,6 +100,53 @@ func TestTransactionItemByIds(t *testing.T) {
 	)
 }
 
+func TestTransactionProblemItemByTxItemIds(t *testing.T) {
+	var scenario moretest_mock.DbScenario
+	moretest.Suite(t, "transaction problem item by tx item ids",
+		moretest.SetupListFunc{moretest_mock.MockPostgresDatabase(&scenario)},
+		func(t *testing.T) {
+			scenario(t, func(db *gorm.DB) {
+				assert.NoError(t, db.AutoMigrate(&invItemProblem{}))
+				assert.NoError(t, db.Create(&[]invItemProblem{
+					{ID: 1, TxItemID: 10, SkuID: "SKU-A", ProblemType: "broken_w", ProblemNote: "penyok", Count: 2},
+					{ID: 2, TxItemID: 11, SkuID: "SKU-B", ProblemType: "lost_w", Count: 1},
+					// Two rows on the same tx item: the highest id wins (deterministic).
+					{ID: 3, TxItemID: 11, SkuID: "SKU-B", ProblemType: "diff_s", ProblemNote: "sobek", Count: 4},
+					// A value outside ware_db.ProblemType (legacy/mistyped) must not fail.
+					{ID: 4, TxItemID: 12, SkuID: "SKU-C", ProblemType: "broken_r", Count: 1},
+				}).Error)
+
+				svc := inventory.NewInventoryService(db)
+				res, err := svc.TransactionProblemItemByTxItemIds(context.Background(),
+					connect.NewRequest(&inventory_iface.TransactionProblemItemByTxItemIdsRequest{
+						TxItemIds: []uint64{10, 11, 12, 999},
+					}))
+				assert.NoError(t, err)
+
+				items := res.Msg.GetItems()
+				assert.Len(t, items, 3) // keyed by tx_item_id; 999 has no problem row
+
+				assert.Equal(t, uint64(1), items[10].GetId())
+				assert.Equal(t, uint64(10), items[10].GetTxItemId())
+				assert.Equal(t, "SKU-A", items[10].GetSkuId())
+				assert.Equal(t, inventory_iface.ProblemType_PROBLEM_TYPE_BROKEN_IN_WAREHOUSE, items[10].GetProblemType())
+				assert.Equal(t, "penyok", items[10].GetProblemNote())
+				assert.Equal(t, int64(2), items[10].GetCount())
+
+				// tx item 11 had two rows; id 3 (the later one) is reported.
+				assert.Equal(t, uint64(3), items[11].GetId())
+				assert.Equal(t, inventory_iface.ProblemType_PROBLEM_TYPE_PRODUCT_DIFFERENT, items[11].GetProblemType())
+				assert.Equal(t, int64(4), items[11].GetCount())
+
+				// Unknown stored value degrades to UNSPECIFIED rather than erroring.
+				assert.Equal(t, inventory_iface.ProblemType_PROBLEM_TYPE_UNSPECIFIED, items[12].GetProblemType())
+
+				assert.NotContains(t, items, uint64(999))
+			})
+		},
+	)
+}
+
 func TestProductBySkuIds(t *testing.T) {
 	var scenario moretest_mock.DbScenario
 	moretest.Suite(t, "product by sku ids",
@@ -122,7 +169,7 @@ func TestProductBySkuIds(t *testing.T) {
 				}
 				sku100 := skuID(100)
 				sku101 := skuID(101)
-				sku102 := skuID(102) // product deleted
+				sku102 := skuID(102)     // product deleted
 				skuMissing := skuID(500) // product not seeded
 
 				svc := inventory.NewInventoryService(db)
