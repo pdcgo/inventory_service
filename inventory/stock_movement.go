@@ -34,7 +34,7 @@ func (s *inventoryServiceImpl) StockMovement(ctx context.Context, req *connect.R
 		}).
 		Table("stock_batch_logs s").
 		Limit(int(req.Msg.Page.Limit)).
-		Order("created_at DESC").
+		Order("id DESC").
 		Where("s.warehouse_id = ?", req.Msg.WarehouseId).
 		Where("s.product_id = ?", req.Msg.ProductId)
 
