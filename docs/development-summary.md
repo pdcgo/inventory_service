@@ -5,6 +5,38 @@ Running log of status, progress, and decisions. Update this after any inventory_
 
 ---
 
+## 2026-08-12 — TransactionByIds gains type + status — DONE
+
+`TransactionDetail` carried only `id`, `extern_order_id`, `receipt`. Callers resolving a
+transaction id (notably the invoice ledger's `balance_change_broken_sources.tx_id` and the new
+`recovery_tx_id`) could not tell a restock from an adjustment-in, nor whether it was completed
+or cancelled.
+
+- **Proto** — two new enums in `inventory_iface/v1`, plus `type = 4` / `status = 5` on
+  `TransactionDetail`:
+  - `TransactionType` — 14 values mirroring `db_models.InvTxType` (`restock, adj_restock, order,
+    return, transfer_in, transfer_out, transit, broken, ch_sku_out, ch_sku_in, adj_in, adj_out,
+    sys_err_in, sys_err_out`).
+  - `TransactionStatus` — 8 values mirroring `db_models.InvTxStatus` (`waiting, ongoing, cancel,
+    completed, picking, picked, packing, packing_completed`).
+- **[inventory/transaction_by_ids.go](../inventory/transaction_by_ids.go)** — `transactionTypes`
+  and `transactionStatuses` lookups, same shape as the existing `problemTypes` map; the `SELECT`
+  gained `type` and `status`.
+
+Decisions:
+- Followed the `ProblemType` precedent: the columns stay free-form text in the DB, so an
+  unrecognised value degrades to `UNSPECIFIED` rather than failing the call (covered by a test
+  seeding `who_knows`).
+- Included `sys_err_in` / `sys_err_out` even though `InvTxType.EnumList()` omits them — the
+  constants exist and can be stored, and a gap would silently read as `UNSPECIFIED`.
+- Test stand-in `invTxRow` gained `Type` and `Status` columns.
+
+Verified: `make proto-gen`, `go build`, `go vet ./...`, `go test -count=1 -p 1 ./...` — green
+except the pre-existing `TestSyncLegacy/sync_legacy_stock` nil-pointer panic in
+`cmd/app_production` (same failure already recorded on 2026-07-16 below; untouched by this work).
+
+---
+
 ## 2026-07-18 — TransactionProblemItemByTxItemIds — DONE
 
 Fourth batch load-by-ids RPC, sibling of `TransactionItemByIds` but over a different table and
@@ -741,3 +773,27 @@ other filters; covered by a `rack_list_test.go` subtest.
 - **Rack Management** (`RackCreate/Update/Delete/Detail/List`) — planning underway; RackList to follow the
   `proto-guideline.md` flexible list pattern. Open design questions: the `team_id` filter semantics (no
   team↔warehouse ownership in the schema), RackList shape (flexible vs simple), and auth scoping.
+
+---
+
+## 2026-08-10 — Warehouse accept fee gets ledger attribution
+
+### Restock fee now records what caused it — DONE
+- The warehouse accept fee posted in `acceptRestock` was the last ledger writer in this service with no source
+  row, so its legs were unattributable in invoice v2 (`GetBalanceChangeSource` returned nothing for them).
+- `invoice_v2.PostBalanceLog` changed its optional source parameter from `...*OrderSource` to a `...LedgerSource`
+  interface, so causes other than orders can be attached. Call sites are unaffected — `*OrderSource` satisfies it.
+- `acceptRestock` now passes `&invoice_v2.RestockSource{TxID: txID, TeamID: restock.TeamID, WarehouseID:
+  restock.WarehouseID}`. `TxID` is the **inventory transaction**, not the restock document id the note carries;
+  `TeamID` is the charged team, identical on both legs so the pair joins as one unit.
+- Files: [inventory/restock_update.go](../inventory/restock_update.go),
+  test [inventory/restock_test.go](../inventory/restock_test.go) (migrates `BalanceChangeRestockSource`).
+- Verified: `go test ./... -p 1` green except the pre-existing `TestSyncLegacy` panic below (confirmed unchanged
+  by stashing this work and re-running).
+
+### Known / pending
+- Historical fee legs stay unattributed until invoice_service's `backfill-sources` command is run; it recovers
+  this service's legs by parsing the `"restock %d warehouse accept fee"` note and resolving the restock document
+  id to its `inventory_transaction_id`.
+- **Pre-existing, unrelated:** `TestSyncLegacy` (cmd/app_production) still panics on a nil `*cli.Command` in its
+  own setup.

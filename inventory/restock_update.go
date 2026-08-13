@@ -450,6 +450,11 @@ func acceptRestock(tx *gorm.DB, restock *inventory_models.InventoryRestock, acce
 			invoice_iface.BalanceChangeType_BALANCE_CHANGE_TYPE_WAREHOUSE_FEE,
 			fee, invoice_iface.BalanceType_BALANCE_TYPE_RECEIVABLE,
 			fmt.Sprintf("restock %d warehouse accept fee", restock.ID), 0, now,
+			&invoice_v2.RestockSource{
+				TxID:        txID,
+				TeamID:      restock.TeamID, // the team charged the fee, constant across legs
+				WarehouseID: restock.WarehouseID,
+			},
 		)
 		if err != nil {
 			return err

@@ -21,6 +21,8 @@ type invTxRow struct {
 	ID          uint64 `gorm:"primarykey"`
 	ExternOrdID string
 	Receipt     string
+	Type        string
+	Status      string
 	Deleted     bool
 }
 
@@ -45,21 +47,34 @@ func TestTransactionByIds(t *testing.T) {
 			scenario(t, func(db *gorm.DB) {
 				assert.NoError(t, db.AutoMigrate(&invTxRow{}))
 				assert.NoError(t, db.Create(&[]invTxRow{
-					{ID: 1, ExternOrdID: "EXT-1", Receipt: "RCP-1"},
-					{ID: 2, ExternOrdID: "EXT-2", Receipt: "RCP-2"},
+					{ID: 1, ExternOrdID: "EXT-1", Receipt: "RCP-1", Type: "restock", Status: "completed"},
+					{ID: 2, ExternOrdID: "EXT-2", Receipt: "RCP-2", Type: "adj_in", Status: "waiting"},
 					{ID: 3, ExternOrdID: "EXT-3", Receipt: "RCP-3", Deleted: true},
+					// a stored value the wire enum does not know about.
+					{ID: 4, ExternOrdID: "EXT-4", Type: "who_knows", Status: "who_knows"},
 				}).Error)
 
 				svc := inventory.NewInventoryService(db)
 				res, err := svc.TransactionByIds(context.Background(), connect.NewRequest(&inventory_iface.TransactionByIdsRequest{
-					Ids: []uint64{1, 3, 404},
+					Ids: []uint64{1, 2, 3, 4, 404},
 				}))
 				assert.NoError(t, err)
 
 				txs := res.Msg.GetTransactions()
-				assert.Len(t, txs, 1) // 3 is deleted, 404 missing
+				assert.Len(t, txs, 3) // 3 is deleted, 404 missing
 				assert.Equal(t, "EXT-1", txs[1].GetExternOrderId())
 				assert.Equal(t, "RCP-1", txs[1].GetReceipt())
+				assert.Equal(t, inventory_iface.TransactionType_TRANSACTION_TYPE_RESTOCK, txs[1].GetType())
+				assert.Equal(t, inventory_iface.TransactionStatus_TRANSACTION_STATUS_COMPLETED, txs[1].GetStatus())
+
+				// the adjustment-in a found-back recovery creates.
+				assert.Equal(t, inventory_iface.TransactionType_TRANSACTION_TYPE_ADJ_IN, txs[2].GetType())
+				assert.Equal(t, inventory_iface.TransactionStatus_TRANSACTION_STATUS_WAITING, txs[2].GetStatus())
+
+				// unknown stored values degrade to UNSPECIFIED rather than erroring.
+				assert.Equal(t, inventory_iface.TransactionType_TRANSACTION_TYPE_UNSPECIFIED, txs[4].GetType())
+				assert.Equal(t, inventory_iface.TransactionStatus_TRANSACTION_STATUS_UNSPECIFIED, txs[4].GetStatus())
+
 				assert.NotContains(t, txs, uint64(3))
 				assert.NotContains(t, txs, uint64(404))
 			})

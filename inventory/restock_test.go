@@ -82,6 +82,7 @@ func TestRestock(t *testing.T) {
 					&invoice_models.TeamBalance{},
 					&invoice_models.BalanceChangeLog{},
 					&invoice_models.TeamBalanceDailyLog{},
+					&invoice_models.BalanceChangeRestockSource{},
 				))
 
 				svc := inventory.NewInventoryService(db)
