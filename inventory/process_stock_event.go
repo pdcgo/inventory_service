@@ -384,10 +384,16 @@ func expandTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface
 		Joins("join inv_transactions it on it.id = iti.inv_transaction_id").
 		Joins("left join restock_costs rc on rc.inv_transaction_id = iti.inv_transaction_id").
 		Where("iti.inv_transaction_id = ?", transactionId)
+
 	if netProblems {
 		countExpr = "(iti.count - coalesce(iip.count, 0)) as change_count"
 		amountExpr = "((iti.count - coalesce(iip.count, 0)) * (iti.price + coalesce(rc.per_piece_fee, 0))) as change_amount"
 		query = query.Joins("left join inv_item_problems iip on iip.tx_item_id = iti.id")
+	}
+
+	atExpr := "it.created as transaction_at"
+	if isInboundChange(changeType) {
+		atExpr = "it.arrived as transaction_at"
 	}
 
 	rows := []*txExpandRow{}
@@ -397,7 +403,7 @@ func expandTxItems(tx *gorm.DB, transactionId uint64, changeType warehouse_iface
 			"it.warehouse_id as warehouse_id",
 			"it.create_by_id as actor_id",
 			"it.id as transaction_id",
-			"it.created as transaction_at",
+			atExpr,
 			countExpr,
 			amountExpr,
 		}).
