@@ -6,12 +6,14 @@ require (
 	connectrpc.com/connect v1.20.0
 	github.com/google/wire v0.7.0
 	github.com/pdcgo/event_source v1.0.9
+	github.com/pdcgo/invoice_service v1.0.11
 	github.com/pdcgo/san_collection v1.0.5
-	github.com/pdcgo/schema v1.0.150
+	github.com/pdcgo/schema v1.1.3
 	github.com/pdcgo/shared v1.0.136
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.7.0
 	google.golang.org/protobuf v1.36.11
+	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.1
 )
 
@@ -80,9 +82,9 @@ require (
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.32 // indirect
-	github.com/microsoft/go-mssqldb v1.9.6 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/pdcgo/user_service v0.0.0-20260707081023-1cbb2b2fa244 // indirect
 	github.com/pdcgo/v2_gots_sdk v1.3.10 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
@@ -131,7 +133,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401001100-f93e5f3e9f0f // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/bigquery v1.2.0 // indirect
 	gorm.io/driver/mysql v1.6.0 // indirect
 	gorm.io/driver/postgres v1.6.0 // indirect

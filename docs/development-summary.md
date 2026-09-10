@@ -797,3 +797,49 @@ other filters; covered by a `rack_list_test.go` subtest.
   id to its `inventory_transaction_id`.
 - **Pre-existing, unrelated:** `TestSyncLegacy` (cmd/app_production) still panics on a nil `*cli.Command` in its
   own setup.
+
+---
+
+## 2026-09-01 — StockMovement: a selling-side view, value, and two rollups
+
+### Contract — DONE
+- `StockMovementRequest` is **unchanged** — `warehouse_id` stays required. The warehouse-scoped RPC keeps its
+  contract; spanning warehouses is a separate RPC rather than a loosened rule on the existing one.
+- Added to [schema/inventory_iface/v1/service.proto](../../schema/inventory_iface/v1/service.proto), regenerated
+  with `make proto-gen`:
+  - `StockMovementSelling` — the selling-side view of the same log, `warehouse_id` optional (0 = every warehouse
+    the product sits in). Reuses `MovementItem`, so the row shape matches `StockMovement` exactly.
+  - The three new requests take `common.v1.TimeFilterRange` (`google.protobuf.Timestamp`) rather than the
+    epoch-microsecond `TimeFilter` the original `StockMovement` still uses.
+  - `StockMovementDaily` — per-day rollup.
+  - `StockMovementBreakdown` — split by change type.
+- `DailyMovementItem` carries flow (`total_in`/`total_out`, `amount_in`/`amount_out`) and the day's closing
+  position (`balance_count`/`balance_amount`/`price`). `total_out` is a positive magnitude so a chart can stack
+  it against `total_in` without flipping signs.
+- `MovementBreakdownItem` carries `change_count`/`change_amount`/`transaction_count` per `StockChangeType`. It is
+  a flow, not a position — there is no per-change-type balance — and is unpaginated, bounded by the enum.
+
+### Handlers — DONE
+- Each handler builds its own query inline (owner's call — no shared scope/list helper), so
+  [inventory/stock_movement.go](../inventory/stock_movement.go) keeps its old shape plus two columns. The
+  selling views skip the warehouse predicate when the id is 0; `StockMovement`'s `gt = 0` rule is enforced
+  by the `validate` interceptor in `custom_connect.NewDefaultInterceptor`.
+- Both now select `price` and `balance_amount`; both were already in the proto and in `stock_batch_logs`, just
+  never read.
+- [inventory/stock_movement_daily.go](../inventory/stock_movement_daily.go) aggregates in **two steps**: the
+  inner query takes each warehouse's last balance of the day (`array_agg(... ORDER BY id DESC)[1]`), the outer
+  sums those across warehouses. Summing raw balances in one pass would multiply-count a product held in several
+  warehouses. Days are cut in Asia/Jakarta and returned as the instant of that midnight.
+- Daily `price` is derived, not stored: `balance_amount / balance_count` at close (a day holds many per-unit
+  prices). 0 when stock is 0.
+- [inventory/stock_movement_breakdown.go](../inventory/stock_movement_breakdown.go) groups by change type using
+  `SUM(change)` and `SUM(change * price)` — `price` is per-unit and non-negative, so the sign follows `change`.
+
+### Known / pending
+- **Tests written but not executed** — [inventory/stock_movement_agg_test.go](../inventory/stock_movement_agg_test.go)
+  covers both rollups, the unscoped-warehouse balance rule, `StockMovementSelling` with and without a warehouse,
+  and price on `StockMovement`, but the local Postgres the `moretest` harness needs was down (Docker engine not
+  running). Build and vet are clean; the assertions still need a real run.
+- `StockMovementRequest` carries no `role_base.v1.request_policy`, unlike most messages in the file. The three
+  new requests declare `allow_only_authenticated: true`; the original was left alone to avoid changing the
+  behaviour of a live endpoint. Worth deciding deliberately.
