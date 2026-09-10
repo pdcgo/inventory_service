@@ -7,6 +7,7 @@ import (
 	"github.com/pdcgo/schema/services/common/v1"
 	inventory_iface "github.com/pdcgo/schema/services/inventory_iface/v1"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 func (s *inventoryServiceImpl) StockMovementSelling(ctx context.Context, req *connect.Request[inventory_iface.StockMovementSellingRequest]) (*connect.Response[inventory_iface.StockMovementSellingResponse], error) {
@@ -19,37 +20,60 @@ func (s *inventoryServiceImpl) StockMovementSelling(ctx context.Context, req *co
 		},
 	}
 
-	query := db.
-		Select([]string{
-			"s.id",
-			"s.change_type",
-			"s.change",
-			"s.transaction_id",
-			"s.product_id",
-			"s.warehouse_id",
-			"s.user_id",
-			"s.created_at",
-			"s.price",
-			"s.balance_count",
-			"s.balance_amount",
-		}).
-		Table("stock_batch_logs s").
-		Limit(int(req.Msg.Page.Limit)).
-		Order("id DESC").
-		Where("s.product_id = ?", req.Msg.ProductId)
-
+	var query *gorm.DB
 	if req.Msg.WarehouseId != 0 {
-		query = query.Where("s.warehouse_id = ?", req.Msg.WarehouseId)
+		query = db.
+			Select([]string{
+				"p.id",
+				"p.change_type",
+				"p.change",
+				"p.transaction_id",
+				"p.product_id",
+				"p.warehouse_id",
+				"p.user_id",
+				"p.created_at",
+				"p.price",
+				"p.balance_count",
+				"p.balance_amount",
+			}).
+			Table("stock_batch_logs p").
+			Where("p.product_id = ?", req.Msg.ProductId).
+			Where("p.warehouse_id = ?", req.Msg.WarehouseId)
+	} else {
+		running := db.
+			Select([]string{
+				"s.id",
+				"s.change_type",
+				"s.change",
+				"s.transaction_id",
+				"s.product_id",
+				"s.warehouse_id",
+				"s.user_id",
+				"s.created_at",
+				"s.price",
+				"(SUM(s.change) OVER (ORDER BY s.id))::bigint AS balance_count",
+				"SUM(s.change * s.price) OVER (ORDER BY s.id) AS balance_amount",
+			}).
+			Table("stock_batch_logs s").
+			Where("s.product_id = ?", req.Msg.ProductId)
+
+		query = db.
+			Select("p.*").
+			Table("(?) AS p", running)
 	}
 
 	if req.Msg.TimeRange != nil {
 		if req.Msg.TimeRange.StartDate != nil {
-			query = query.Where("s.created_at >= ?", req.Msg.TimeRange.StartDate.AsTime())
+			query = query.Where("p.created_at >= ?", req.Msg.TimeRange.StartDate.AsTime())
 		}
 		if req.Msg.TimeRange.EndDate != nil {
-			query = query.Where("s.created_at <= ?", req.Msg.TimeRange.EndDate.AsTime())
+			query = query.Where("p.created_at <= ?", req.Msg.TimeRange.EndDate.AsTime())
 		}
 	}
+
+	query = query.
+		Order("p.id DESC").
+		Limit(int(req.Msg.Page.Limit))
 
 	if req.Msg.Page.Page > 0 {
 		query = query.Offset(int((req.Msg.Page.Page - 1) * req.Msg.Page.Limit))

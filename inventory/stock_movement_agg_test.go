@@ -154,7 +154,10 @@ func TestStockMovementAggregations(t *testing.T) {
 					assert.Equal(t, uint64(4), newest.Id)
 					assert.Equal(t, uint64(2), newest.WarehouseId)
 					assert.Equal(t, float64(200), newest.Price)
-					assert.Equal(t, float64(600), newest.BalanceAmount)
+					// unscoped, so the position is the running total across both warehouses —
+					// not warehouse 2's own stored 3 / 600
+					assert.Equal(t, int64(14), newest.BalanceCount)      // 10 - 4 + 5 + 3
+					assert.Equal(t, float64(1800), newest.BalanceAmount) // 1000 - 400 + 600 + 600
 				})
 
 				t.Run("selling movement still narrows when a warehouse is given", func(t *testing.T) {
@@ -167,6 +170,9 @@ func TestStockMovementAggregations(t *testing.T) {
 					assert.NoError(t, err)
 					assert.Len(t, res.Msg.Movements, 1)
 					assert.Equal(t, uint64(4), res.Msg.Movements[0].Id)
+					// scoped, so the stored per-warehouse position is read straight out
+					assert.Equal(t, int64(3), res.Msg.Movements[0].BalanceCount)
+					assert.Equal(t, float64(600), res.Msg.Movements[0].BalanceAmount)
 				})
 
 				t.Run("selling movement filters by the timestamp range", func(t *testing.T) {
